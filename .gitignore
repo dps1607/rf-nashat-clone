@@ -1,0 +1,43 @@
+# Secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# ChromaDB — lives outside the repo, but safety belt in case anyone copies it in
+chroma_db/
+*.chroma
+chroma_data/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+
+# Local config overrides
+config/*.local.yaml
