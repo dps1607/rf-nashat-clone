@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Log in — Nashat Admin{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <div class="login-card">
+    <h1>Nashat Admin</h1>
+    <p class="login-sub">Sign in to edit agent configurations.</p>
+    <form method="POST" action="{{ url_for('login') }}" class="login-form">
+      <label>
+        Username
+        <input type="text" name="username" autofocus required autocomplete="username">
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required autocomplete="current-password">
+      </label>
+      <button type="submit" class="btn-primary">Log in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

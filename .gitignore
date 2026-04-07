@@ -41,3 +41,11 @@ logs/
 
 # Local config overrides
 config/*.local.yaml
+
+# Admin users (hashed passwords — never commit)
+admin_users.json
+config/admin_users.json
+
+# Flask session storage
+.flask_session/
+flask_session/

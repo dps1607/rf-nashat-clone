@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Nashat Admin{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% if current_user %}
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand">Nashat Admin</span>
+      <span class="env-tag">phase 2 · local</span>
+    </div>
+    <div class="topbar-right">
+      <span class="user-info">{{ current_user.username }}</span>
+      <a class="logout-link" href="{{ url_for('logout') }}">log out</a>
+    </div>
+  </header>
+  {% endif %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-container">
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
