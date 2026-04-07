@@ -31,7 +31,12 @@ import bcrypt
 from flask import session, redirect, url_for, request
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-USERS_FILE = _REPO_ROOT / "config" / "admin_users.json"
+# On Railway, set ADMIN_USERS_PATH=/data/admin_users.json so the file lives
+# on the persistent volume. Falls back to the in-repo location for local dev.
+USERS_FILE = Path(os.environ.get(
+    "ADMIN_USERS_PATH",
+    str(_REPO_ROOT / "config" / "admin_users.json")
+))
 
 
 def _load_users() -> dict:

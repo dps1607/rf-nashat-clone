@@ -62,7 +62,10 @@ CHROMA_DB_PATH = os.environ.get(
 DEFAULT_AGENT = os.environ.get("DEFAULT_AGENT", "nashat_sales")
 PORT = int(os.environ.get("PORT", "5051"))
 
-AGENT_YAML = _REPO_ROOT / "config" / f"{DEFAULT_AGENT}.yaml"
+# On Railway, set CONFIG_DIR=/data/config so YAMLs live on the persistent
+# volume. Falls back to the in-repo config/ directory for local dev.
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", str(_REPO_ROOT / "config")))
+AGENT_YAML = CONFIG_DIR / f"{DEFAULT_AGENT}.yaml"
 if not AGENT_YAML.exists():
     print(f"FATAL: agent config not found: {AGENT_YAML}", file=sys.stderr)
     sys.exit(1)

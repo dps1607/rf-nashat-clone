@@ -41,7 +41,9 @@ load_dotenv(_REPO_ROOT / ".env")
 SESSION_SECRET = os.environ.get("ADMIN_SESSION_SECRET", "")
 RAG_SERVER_URL = os.environ.get("RAG_SERVER_URL", "http://localhost:5051")
 PORT = int(os.environ.get("ADMIN_PORT", "5052"))
-CONFIG_DIR = _REPO_ROOT / "config"
+# On Railway, set CONFIG_DIR=/data/config so YAMLs live on the persistent
+# volume. Falls back to the in-repo config/ directory for local dev.
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", str(_REPO_ROOT / "config")))
 
 AVAILABLE_AGENTS = ["nashat_sales", "nashat_coaching"]
 
