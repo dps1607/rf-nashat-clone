@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "./bootstrap.sh && honcho start",
+    "startCommand": "./bootstrap.sh && honcho start -f Procfile.honcho",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
