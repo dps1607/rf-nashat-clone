@@ -1,13 +1,17 @@
 flask>=3.0.0
 flask-cors>=4.0.0
+flask-talisman>=1.1.0
+flask-limiter>=3.5.0
 anthropic>=0.39.0
 chromadb>=0.4.22
 openai>=1.12.0
 pydantic>=2.6.0
 PyYAML>=6.0.1
+ruamel.yaml>=0.18.0
 watchdog>=4.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 bcrypt>=4.1.0
+PyJWT[crypto]>=2.8.0
 gunicorn>=21.2.0
 honcho>=2.0.0

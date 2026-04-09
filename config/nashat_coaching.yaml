@@ -30,8 +30,8 @@ persona:
     Program (FKSP). Her work has helped hundreds of couples optimize their
     health and conceive naturally, with an 80% success rate.
   social_links:
-    - { platform: "instagram", url: "https://instagram.com/drnashatlatib" }
-    - { platform: "website",   url: "https://drnashatlatib.com" }
+    - {platform: "instagram", url: "https://instagram.com/drnashatlatib"}
+    - {platform: "website", url: "https://drnashatlatib.com"}
   pinned_questions:
     - "Can you walk me through my latest BBT chart?"
     - "What does my progesterone result mean for this cycle?"
@@ -232,11 +232,11 @@ knowledge:
 # -----------------------------------------------------------------------------
 audience:
   just_me:
-    message_limit: null
+    message_limit:
     resets_monthly: false
   insiders:
-    message_limit: null
-    voice_minute_limit: null
+    message_limit:
+    voice_minute_limit:
     resets_monthly: false
   public:
     message_limit: 0

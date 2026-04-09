@@ -28,8 +28,8 @@ persona:
     Program (FKSP). Her work has helped hundreds of couples optimize their
     health and conceive naturally, with an 80% success rate.
   social_links:
-    - { platform: "instagram", url: "https://instagram.com/drnashatlatib" }
-    - { platform: "website",   url: "https://drnashatlatib.com" }
+    - {platform: "instagram", url: "https://instagram.com/drnashatlatib"}
+    - {platform: "website", url: "https://drnashatlatib.com"}
   pinned_questions:
     - "What is the Fertility Kickstart Program?"
     - "How is your approach different from regular fertility treatment?"
@@ -211,7 +211,7 @@ knowledge:
 # -----------------------------------------------------------------------------
 audience:
   just_me:
-    message_limit: null
+    message_limit:
     resets_monthly: false
   insiders:
     message_limit: 1000

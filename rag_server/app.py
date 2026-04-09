@@ -55,10 +55,20 @@ load_dotenv(_REPO_ROOT / ".env")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-CHROMA_DB_PATH = os.environ.get(
-    "CHROMA_DB_PATH",
-    "/Users/danielsmith/Claude - RF 2.0/chroma_db",
-)
+CHROMA_DB_PATH = os.environ.get("CHROMA_DB_PATH")
+if not CHROMA_DB_PATH:
+    # Local dev fallback: use ./chroma_db relative to repo root. Railway must
+    # set CHROMA_DB_PATH=/data/chroma_db explicitly — we refuse to guess.
+    _default = Path(__file__).resolve().parent.parent / "chroma_db"
+    if _default.exists():
+        CHROMA_DB_PATH = str(_default)
+        print(f"[startup] CHROMA_DB_PATH unset, defaulting to {CHROMA_DB_PATH}",
+              file=sys.stderr)
+    else:
+        raise RuntimeError(
+            "CHROMA_DB_PATH environment variable is required. "
+            "Set it to the absolute path of your chroma_db directory."
+        )
 DEFAULT_AGENT = os.environ.get("DEFAULT_AGENT", "nashat_sales")
 PORT = int(os.environ.get("PORT", "5051"))
 

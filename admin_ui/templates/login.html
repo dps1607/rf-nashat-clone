@@ -1,21 +1,30 @@
 {% extends "base.html" %}
-{% block title %}Log in — Nashat Admin{% endblock %}
+{% block title %}Sign in — Nashat Admin{% endblock %}
 {% block content %}
 <div class="login-wrap">
   <div class="login-card">
     <h1>Nashat Admin</h1>
-    <p class="login-sub">Sign in to edit agent configurations.</p>
-    <form method="POST" action="{{ url_for('login') }}" class="login-form">
-      <label>
-        Username
-        <input type="text" name="username" autofocus required autocomplete="username">
-      </label>
-      <label>
-        Password
-        <input type="password" name="password" required autocomplete="current-password">
-      </label>
-      <button type="submit" class="btn-primary">Log in</button>
-    </form>
+
+    {% if cloudflare_mode %}
+      <p class="login-sub">This admin panel is protected by Cloudflare Access.</p>
+      <p>You should have been redirected to the Cloudflare sign-in page automatically.
+         If you are seeing this message, your Cloudflare Access session has expired or
+         your email address is not on the admin allowlist.</p>
+      <p>Please contact the administrator if you need access.</p>
+    {% else %}
+      <p class="login-sub">Sign in to edit agent configurations.</p>
+      <form method="POST" action="{{ url_for('login') }}" class="login-form">
+        <label>
+          Username
+          <input type="text" name="username" autofocus required autocomplete="username">
+        </label>
+        <label>
+          Password
+          <input type="password" name="password" required autocomplete="current-password">
+        </label>
+        <button type="submit" class="btn-primary">Log in</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

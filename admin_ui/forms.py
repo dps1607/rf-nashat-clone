@@ -2,17 +2,25 @@
 Form helpers — render AgentConfig as editable form structure, parse it back.
 
 The strategy:
-- For rendering, we walk the YAML dict (loaded by PyYAML) and emit a sequence
+- For rendering, we walk the YAML dict (loaded by ruamel.yaml in round-trip
+  mode, so comments/quoting/inline-lists are preserved) and emit a sequence
   of "field descriptors" the Jinja template can iterate over.
 - For parsing, we accept the form POST data, reconstruct the YAML dict, and
   validate it against the Pydantic schema before writing to disk.
+
+Why ruamel.yaml (not PyYAML): PyYAML's yaml.safe_dump destroys comments,
+rewrites quoted strings, flattens inline lists, and can embed \\r\\n as literal
+escape sequences — every save would destructively normalize the file.
+ruamel.yaml's round-trip mode preserves all of that exactly.
 """
 from __future__ import annotations
+import io
 import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -20,26 +28,42 @@ if str(_REPO_ROOT) not in sys.path:
 
 from config.schema import AgentConfig, validate_default_mode_exists
 
+# Shared round-trip YAML instance. Configured once so every load/save
+# uses identical formatting rules.
+#
+# Width is set to a very large number so ruamel never hard-wraps long strings
+# mid-value — this preserves one-line quoted strings that the original files
+# use extensively. Indent settings match the 2/4/2 convention already in use
+# across the project YAMLs.
+_yaml = YAML(typ="rt")
+_yaml.preserve_quotes = True
+_yaml.width = 4096
+_yaml.indent(mapping=2, sequence=4, offset=2)
 
-def load_yaml(path: Path) -> dict:
+
+def load_yaml(path: Path) -> CommentedMap:
+    """Load YAML preserving comments, quoting, and structure."""
     with open(path) as f:
-        return yaml.safe_load(f) or {}
+        data = _yaml.load(f)
+    return data if data is not None else CommentedMap()
 
 
-def save_yaml(path: Path, data: dict) -> None:
-    """Write YAML back to disk in a stable, human-readable format."""
+def save_yaml(path: Path, data: Any) -> None:
+    """Write YAML back to disk in round-trip mode.
+
+    Preserves comments, quote styles, inline flow collections, and blank
+    lines that were present when the file was originally loaded.
+    """
     with open(path, "w") as f:
-        yaml.safe_dump(
-            data, f,
-            sort_keys=False,
-            default_flow_style=False,
-            allow_unicode=True,
-            width=100,
-        )
+        _yaml.dump(data, f)
 
 
-def validate(data: dict) -> tuple[bool, str]:
-    """Run the dict through Pydantic. Return (ok, error_message)."""
+def validate(data: Any) -> tuple[bool, str]:
+    """Run the dict through Pydantic. Return (ok, error_message).
+
+    ruamel's CommentedMap/CommentedSeq inherit from dict/list so Pydantic
+    accepts them directly. No conversion needed.
+    """
     try:
         config = AgentConfig(**data)
         validate_default_mode_exists(config)
