@@ -61,7 +61,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Optional
 
-import bcrypt
 import jwt
 import requests
 from flask import session, redirect, url_for, request, abort
@@ -186,16 +185,29 @@ def lookup_email(email: str) -> Optional[dict]:
 # -----------------------------------------------------------------------------
 # Local bcrypt mode: username-keyed password auth (dev only, preserved)
 # -----------------------------------------------------------------------------
+#
+# bcrypt is imported lazily inside the functions that use it. This is
+# deliberate: scripts that `from admin_ui.auth import ...` from a non-venv
+# python (e.g. tooling, maintenance scripts) should not crash at import time
+# just because bcrypt isn't installed system-wide. Cloudflare-mode production
+# deployments never touch these functions, so they never need bcrypt at all.
+
+def _bcrypt():
+    import bcrypt  # noqa: WPS433 — deliberate lazy import, see block comment above
+    return bcrypt
+
 
 def hash_password(plaintext: str) -> str:
     if not plaintext:
         raise ValueError("password cannot be empty")
+    bcrypt = _bcrypt()
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(plaintext.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plaintext: str, hashed: str) -> bool:
     try:
+        bcrypt = _bcrypt()
         return bcrypt.checkpw(plaintext.encode("utf-8"), hashed.encode("utf-8"))
     except (ValueError, TypeError):
         return False
@@ -224,8 +236,18 @@ def remove_user(username: str) -> bool:
     return True
 
 
-# Pre-computed dummy hash for constant-time comparison on unknown username
-_DUMMY_HASH = bcrypt.hashpw(b"unused", bcrypt.gensalt(rounds=12))
+# Cached dummy hash for constant-time comparison on unknown username.
+# Computed lazily on first use so importing this module doesn't require
+# bcrypt to be installed (see _bcrypt() block comment above).
+_DUMMY_HASH_CACHE: Optional[bytes] = None
+
+
+def _dummy_hash() -> bytes:
+    global _DUMMY_HASH_CACHE
+    if _DUMMY_HASH_CACHE is None:
+        bcrypt = _bcrypt()
+        _DUMMY_HASH_CACHE = bcrypt.hashpw(b"unused", bcrypt.gensalt(rounds=12))
+    return _DUMMY_HASH_CACHE
 
 
 def authenticate(username: str, password: str) -> Optional[dict]:
@@ -236,7 +258,8 @@ def authenticate(username: str, password: str) -> Optional[dict]:
     users = _load_users()
     user = users.get(username)
     if user is None or "password_hash" not in user:
-        bcrypt.checkpw(password.encode("utf-8"), _DUMMY_HASH)  # timing constant
+        bcrypt = _bcrypt()
+        bcrypt.checkpw(password.encode("utf-8"), _dummy_hash())  # timing constant
         return None
     if verify_password(password, user["password_hash"]):
         return {
