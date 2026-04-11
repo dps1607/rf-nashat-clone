@@ -96,3 +96,38 @@ IMAGE_MIMES = {
     "image/gif",
     "image/webp",
 }
+
+# ---------------------------------------------------------------------------
+# Google Cloud project configuration
+#
+# These values identify the GCP project that hosts the service account
+# (Drive read access) AND the Vertex AI region we call for vision
+# enrichment. Keeping them as constants here means the ingester code
+# never has to guess which project it's in.
+#
+# Created 2026-04-11 inside the drnashatlatib.com Workspace org.
+# Project lives under the org-level billing account (currently on the
+# $300 GCP free trial credit).
+# ---------------------------------------------------------------------------
+GCP_PROJECT_ID = "rf-rag-ingester-493016"
+GCP_PROJECT_NUMBER = "577782593839"
+GCP_ORG_DOMAIN = "drnashatlatib.com"
+
+# Vertex AI region for vision calls. us-central1 is the most-supported
+# region for Gemini models on Vertex; we can change this later if data
+# residency requirements push us elsewhere.
+VERTEX_AI_REGION = "us-central1"
+
+# Service account email — populated AFTER the service account is created
+# in Session 2 (see HANDOVER_INTERNAL_EDUCATION_BUILD.md). This is the
+# expected pattern; the actual email will match this exactly because the
+# service account name is fixed at "rf-ingester".
+SERVICE_ACCOUNT_EMAIL = f"rf-ingester@{GCP_PROJECT_ID}.iam.gserviceaccount.com"
+
+# Trial billing account ID. Auto-linked to rf-rag-ingester-493016 at
+# project creation because the org has only one billing account at this
+# point. When the trial expires (~90 days from 2026-04-11) or runs out
+# of the $300 credit, this is replaced by a real org-level paid billing
+# account. Tracked in ADR-001 / GCP_ORG_SETUP_FOR_INFO.md.
+GCP_BILLING_ACCOUNT_ID = "0126AE-905A01-F1ECAE"
+GCP_BILLING_ACCOUNT_NAME = "My Billing Account (free trial)"
