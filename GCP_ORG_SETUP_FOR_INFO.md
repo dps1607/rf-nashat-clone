@@ -4,7 +4,7 @@
 super-admin account.
 
 **Purpose:** establish a proper Google Cloud Platform (GCP) organization
-under the `reimagined-health.com` Workspace domain, create an organization-
+under the `drnashatlatib.com` Workspace domain, create an organization-
 level billing account, allow service accounts to be members of Shared
 Drives, grant `dan@reimagined-health.com` the IAM roles needed to operate
 inside the org, and migrate the existing orphan `rf-rag-ingester` project
@@ -25,6 +25,63 @@ and that account must have Workspace super-admin rights.
 
 ---
 
+## Important: the two-domain situation (read this before starting)
+
+This doc references **two different domains**, and they are not a typo:
+
+- **`drnashatlatib.com`** is the Google Workspace tenant domain. The GCP
+  organization is named `drnashatlatib.com` because that's the primary
+  Workspace domain.
+- **`reimagined-health.com`** is a *secondary domain* on the same
+  Workspace tenant. Both `info@reimagined-health.com` and
+  `dan@reimagined-health.com` are users *inside* the `drnashatlatib.com`
+  Workspace, just on the secondary domain.
+
+What this means in practice:
+
+- Wherever the doc says "the `drnashatlatib.com` org" — that's the GCP
+  organization. There's only one.
+- Wherever the doc says `info@reimagined-health.com` or
+  `dan@reimagined-health.com` — those are real user logins on the
+  Workspace. They are internal to the org, not external.
+- IAM grants to `dan@reimagined-health.com` will work cleanly without
+  any external-user toggles, because Dan is internal to the Workspace
+  even though his email domain is the secondary one.
+
+If you ever see the GCP console refer to your org as anything other
+than `drnashatlatib.com`, stop and tell Dan — that would mean something
+about the Workspace structure has changed.
+
+---
+
+## Free trial credit (claim this when GCP offers it)
+
+When you first land in the GCP console, Google will likely offer a
+**$300 free trial credit** at the top of the page ("Start your Free
+Trial with $300 in credit"). **Claim it.**
+
+The entire RF RAG build (Vertex AI vision calls + OpenAI embeddings +
+Anthropic chunking + storage) is estimated at well under $50 total
+across all three programs. $300 of credit covers the build many times
+over.
+
+Important properties of the trial:
+
+- It's a 90-day trial OR until you exhaust the $300, whichever comes
+  first
+- It does NOT auto-charge. When the trial expires, services pause until
+  you manually upgrade. There's no surprise bill risk.
+- You can still set up the real org-level billing account in Step 3
+  alongside the trial — the company billing account just sits unlinked
+  until you're ready to upgrade. Best of both worlds.
+
+So the order is: claim the trial when GCP offers it → continue with
+the steps below → set up the real org billing account in Step 3 →
+when the trial expires (months from now), upgrade and link the
+project to the real billing account.
+
+---
+
 ## Background you should know before you start
 
 Google Cloud has a concept of an **Organization** that sits above projects.
@@ -33,7 +90,7 @@ With an org, projects inherit IAM policies, billing policies, and audit
 logging from a central place.
 
 For a Workspace customer, the org is automatically tied to the Workspace
-domain — meaning `reimagined-health.com` *can* have a GCP organization, but
+domain — meaning `drnashatlatib.com` *can* have a GCP organization, but
 only if someone with super-admin rights explicitly accepts the GCP Terms
 of Service for the org. That's what step 1 is about.
 
@@ -58,7 +115,7 @@ let's confirm.
 1. Go to https://admin.google.com while logged in as `info@reimagined-health.com`
 2. In the left sidebar, click **Account → Account settings**
 3. Look for a section called **Legal and compliance** or **Cloud Identity**
-4. Confirm it shows your domain (`reimagined-health.com`) as enrolled
+4. Confirm it shows your domain (`drnashatlatib.com`) as enrolled
 
 If you don't see Cloud Identity at all, you may need to enable it:
 - Go to https://admin.google.com/ac/billing/subscriptions
@@ -76,9 +133,9 @@ This is a no-op for most paid Workspace customers but worth checking.
    acceptance screen. Read it, check the boxes, and accept.
 3. After accepting, look at the top-left project picker. Click it.
 4. In the dialog, switch to the **ALL** tab (not "Recent" or "Starred").
-5. You should now see an Organization entry called **reimagined-health.com**
+5. You should now see an Organization entry called **drnashatlatib.com**
    at the top of the resource tree. **If you see this, the org exists.**
-   Click on `reimagined-health.com` to select it as your scope.
+   Click on `drnashatlatib.com` to select it as your scope.
 6. If you do NOT see an organization entry, stop and tell Dan. It means
    Cloud Identity needs additional setup steps that vary by Workspace
    plan, and we'll need to debug.
@@ -94,7 +151,7 @@ read-only access to specific folders.
 
 By default, many Workspace orgs treat service accounts as "external users"
 because their email domain ends in `iam.gserviceaccount.com` rather than
-`reimagined-health.com`. If external membership in Shared Drives is locked
+`drnashatlatib.com`. If external membership in Shared Drives is locked
 down, the service account can be invited but its permissions will silently
 fail to take effect, which is one of the most painful debugging experiences
 in Google Cloud.
@@ -105,23 +162,23 @@ in Google Cloud.
 2. Hamburger menu → **Apps → Google Workspace → Drive and Docs**
 3. Click **Sharing settings**
 4. Find the section **Sharing options** (the org-wide defaults for Drive sharing)
-5. Look at **Sharing outside of reimagined-health.com**:
+5. Look at **Sharing outside of drnashatlatib.com**:
    - Should be **ON**, with **"Allow users to receive files from outside
-     reimagined-health.com"** enabled
+     drnashatlatib.com"** enabled
    - **"Warn when files owned by users or shared drives in
-     reimagined-health.com are shared outside of reimagined-health.com"**
+     drnashatlatib.com are shared outside of drnashatlatib.com"**
      should also be enabled
    - This is a sensible default — allows the service account as a member
      without making the org wide open
 6. Find **Access Checker** and set it to **"Recipients only, or
-   reimagined-health.com"** (the most common safe setting)
+   drnashatlatib.com"** (the most common safe setting)
 7. Save changes
 
 **Additional controls to verify on the same page (depending on Workspace plan):**
 
 8. Look for **"Allow members with manager access to share folders with
    people outside their organization"** — should be ON
-9. Look for **"Distributing content outside of reimagined-health.com"** —
+9. Look for **"Distributing content outside of drnashatlatib.com"** —
    should allow it, ideally with the warning enabled
 
 **If you cannot find these settings, or they look different from what's
@@ -145,7 +202,12 @@ minute debugging session that this 2-minute admin step prevents.
 This is the billing account the company will use for all GCP services
 going forward, not just this one project.
 
-1. With the `reimagined-health.com` org selected at the top, click the
+**Note:** if you claimed the $300 free trial credit on the GCP landing
+page, you can still do this step in parallel — the trial credit covers
+spend until it expires, and the org billing account sits unlinked
+until you're ready to upgrade. Both can exist simultaneously.
+
+1. With the `drnashatlatib.com` org selected at the top, click the
    hamburger menu (☰) → **Billing**
 2. If you see "This organization has no billing accounts," click
    **CREATE ACCOUNT** (or **MANAGE BILLING ACCOUNTS → CREATE ACCOUNT**)
@@ -153,7 +215,7 @@ going forward, not just this one project.
    name that signals "this is the main company billing account")
 4. **Country:** United States
 5. **Currency:** USD
-6. **Organization:** should auto-fill to `reimagined-health.com`. Confirm.
+6. **Organization:** should auto-fill to `drnashatlatib.com`. Confirm.
 7. Click **CONTINUE**
 8. **Billing profile:**
    - **Account type:** Business
@@ -176,11 +238,11 @@ this account later.
 This is the step that lets Dan create projects, use billing, and enable
 APIs inside the org without needing super-admin rights.
 
-1. With the `reimagined-health.com` org selected at top, hamburger menu
+1. With the `drnashatlatib.com` org selected at top, hamburger menu
    (☰) → **IAM & Admin → IAM**
 2. Confirm at the top of the page it says you're viewing IAM at the
    **Organization** level (not at a project level). The breadcrumb should
-   show `reimagined-health.com`, not a project name.
+   show `drnashatlatib.com`, not a project name.
 3. Click **+ GRANT ACCESS** (top of the page)
 4. **New principals:** type `dan@reimagined-health.com`
 5. **Assign roles** — add ALL of the following (click "Add another role"
@@ -260,18 +322,21 @@ rather than doing them yourself.
 3. Hamburger menu (☰) → **IAM & Admin → Settings**
 4. Look for a section called **Migrate** or a button called **MIGRATE**
    near the top of the project settings page. Click it.
-5. You should now see the `reimagined-health.com` org as a destination.
+5. You should now see the `drnashatlatib.com` org as a destination.
    Select it and confirm the migration.
 6. Wait ~30 seconds for the migration to complete.
 
 After migration:
 7. Hamburger menu → **Billing** → **LINK A BILLING ACCOUNT**
-8. Select the **Reimagined Health — Primary** billing account that
-   `info@` created in step 3
-9. Confirm
+8. If you claimed the $300 free trial earlier, the trial billing
+   account will be auto-linked already — you can leave it for now.
+9. When the trial expires (or sooner if you prefer), come back here
+   and link the **Reimagined Health — Primary** account that `info@`
+   created in step 3.
 
-The project is now: inside the org, billed to the company account,
-inheriting org-level IAM, and ready to have APIs enabled.
+The project is now: inside the org, billed to the company account (or
+to the trial credit), inheriting org-level IAM, and ready to have APIs
+enabled.
 
 ---
 
@@ -280,10 +345,10 @@ inheriting org-level IAM, and ready to have APIs enabled.
 After all of the above, confirm the following from `dan@`'s account:
 
 1. https://console.cloud.google.com/ shows `rf-rag-ingester` under the
-   `reimagined-health.com` org in the project picker (not under "No
+   `drnashatlatib.com` org in the project picker (not under "No
    organization")
-2. Hamburger → **Billing** on the project shows it's linked to
-   "Reimagined Health — Primary"
+2. Hamburger → **Billing** on the project shows it's linked to a billing
+   account (either the trial account or "Reimagined Health — Primary")
 3. Hamburger → **IAM & Admin → IAM** at the org level shows
    `dan@reimagined-health.com` with the four roles from step 4
 
@@ -297,8 +362,8 @@ account, sharing the FKSP Shared Drive, and so on).
 
 Once this walkthrough is complete, the following becomes true:
 
-- Every GCP cost goes on the company's billing account, not anyone's
-  personal card
+- Every GCP cost goes on the company's billing account (or the trial),
+  not anyone's personal card
 - Every API call made by the ingester is auditable in Cloud Logging
   under the org
 - If Dan ever loses access to his account, the projects don't get
@@ -323,4 +388,6 @@ click something unexpected.
 
 *Document written 2026-04-11 for the Reimagined Fertility RAG system
 build. See HANDOVER_INTERNAL_EDUCATION_BUILD.md for the broader
-project context.*
+project context. Updated to reflect that the Workspace org is
+`drnashatlatib.com` (with `reimagined-health.com` as a secondary
+domain) and to incorporate the $300 GCP free trial credit.*
