@@ -22,6 +22,13 @@ Clinical tier when PHI arrives.
 
 ## What you need before starting
 
+- **Phase C must be complete first.** The service account must already
+  exist as a real Google account. Google Drive rejects shares to email
+  addresses that do not correspond to existing Google accounts with the
+  error *"Sharing to email addresses without a Google account is not yet
+  supported."* (This was discovered the hard way during the 2026-04-11
+  pilot — the original version of this doc incorrectly claimed pending
+  shares would work.)
 - Logged into Chrome as `dan@reimagined-health.com`
 - Confirmed `dan@` has **Manager** role on each of the twelve Shared Drives
   (NOT Content Manager — Manager. Check via: gear icon → Manage members on
@@ -32,9 +39,8 @@ Clinical tier when PHI arrives.
   rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com
   ```
 
-  Note: the service account does not exist yet (it gets created in Phase C).
-  Drive accepts pending shares to email addresses that don't yet exist —
-  the share activates the moment the account is created.
+  Per the above, this account must exist before Phase B begins. See
+  `GCP_PHASE_C_SERVICE_ACCOUNT.md`.
 
 ---
 
@@ -108,10 +114,11 @@ or paste the email in two parts and confirm. If it persistently rejects,
 check that you typed the email exactly:
 `rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`
 
-**"Pending — user has not joined yet."**
-This is EXPECTED. The service account doesn't exist yet (it's created in
-Phase C). The pending state is fine; the share activates when the account
-is created.
+**"Pending — user has not joined yet." / "Sharing to email addresses without a Google account is not yet supported."**
+Google no longer accepts pending shares to email addresses without
+existing Google accounts. This means the service account MUST exist before
+Phase B can begin. If you see this error, the fix is to complete Phase C
+first (create the service account in GCP), then return to Phase B.
 
 **The "Notify people" checkbox is on by default and you can't uncheck it.**
 Some Drive UIs hide the checkbox. Click "Send" anyway — Drive will try to
