@@ -1,0 +1,14 @@
+# rf-nashat-ingester dependencies
+#
+# These are SEPARATE from the main requirements.txt so the admin UI and
+# rag_server services don't have to install Drive/video/PDF deps they
+# never use. The ingester service on Railway installs BOTH this file and
+# requirements.txt (for chromadb, openai, anthropic, which it shares).
+#
+# Session 1 scope: only the Google Drive client is needed for inventory.
+# Session 2 will add video, PDF, and image processing deps.
+
+# Google Drive (service account + API v3)
+google-api-python-client>=2.120.0
+google-auth>=2.28.0
+google-auth-httplib2>=0.2.0
