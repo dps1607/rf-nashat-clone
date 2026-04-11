@@ -129,5 +129,14 @@ SERVICE_ACCOUNT_EMAIL = f"rf-ingester@{GCP_PROJECT_ID}.iam.gserviceaccount.com"
 # point. When the trial expires (~90 days from 2026-04-11) or runs out
 # of the $300 credit, this is replaced by a real org-level paid billing
 # account. Tracked in ADR-001 / GCP_ORG_SETUP_FOR_INFO.md.
-GCP_BILLING_ACCOUNT_ID = "0126AE-905A01-F1ECAE"
-GCP_BILLING_ACCOUNT_NAME = "My Billing Account (free trial)"
+#
+# Read from env vars (NOT hardcoded) so the actual ID never lives in
+# the repo. Set GCP_BILLING_ACCOUNT_ID in your local .env (gitignored)
+# and in Railway env vars when the ingester service is created.
+# Returns None if unset; most ingester code paths do not need this
+# value at all (it exists for future Vertex AI billing routing and
+# audit log queries).
+GCP_BILLING_ACCOUNT_ID = os.environ.get("GCP_BILLING_ACCOUNT_ID")
+GCP_BILLING_ACCOUNT_NAME = os.environ.get(
+    "GCP_BILLING_ACCOUNT_NAME", "My Billing Account (free trial)"
+)
