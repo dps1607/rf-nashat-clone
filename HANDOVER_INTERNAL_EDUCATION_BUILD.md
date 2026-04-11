@@ -3,6 +3,66 @@
 
 ---
 
+## ⚠ Updates from 2026-04-11 design pass — READ FIRST
+
+This master plan has been **substantially refined** by the Phase A
+design pass on 2026-04-11. The core build goal and the four content
+collections are unchanged, but the architecture around them is now
+significantly more developed. Read these four ADRs *before* this
+master plan — they take precedence where they conflict:
+
+1. **ADR_001_drive_ingestion_scope.md** — RESCOPED. The dedicated
+   `RF AI Ingestion Source` drive is no longer being created for
+   the current build. Behavioral scoping via the folder-selection
+   UI replaces credential-level scoping for non-PHI content. The
+   dedicated-drive pattern is reserved for the eventual Clinical
+   tier when PHI arrives.
+2. **ADR_002_continuous_diff_and_registry.md** — DECIDED. The
+   ingester is now built as a continuously-updated content
+   management system with a library registry, diff engine, and
+   library-aware agents. 14 starter libraries across 4 access
+   tiers. Soft-delete with review queue. Replace-on-modify
+   versioning with append-only exception for DMs.
+3. **ADR_003_canva_dedup.md** — PROPOSED stub. Canva is its own
+   Reference-tier library; channels reference it by ID. Detailed
+   dedup mechanism (perceptual hashing, version handling) deferred.
+4. **ADR_004_folder_selection_ui.md** — DECIDED in principle. A
+   web-based folder-tree UI in the admin console drives ingestion;
+   the Save button is the primary diff trigger. Built after the
+   first inventory walk so it can be designed against real data.
+
+### What changed from this master plan as a result
+
+- **Build sequence:** Phase B is now "share twelve Shared Drives
+  with the service account" instead of "create dedicated drive +
+  populate shortcuts." Roughly 30 minutes saved per `info@` work
+  session.
+- **`config.py` PROGRAMS dict:** the hardcoded folder IDs become
+  a starter seed for the UI, not the source of truth. The UI's
+  selection state in the registry is the source of truth.
+- **First ingestion:** still FKSP-pilot via CLI, but the second
+  ingestion onwards goes through the new UI.
+- **Diff trigger:** the master plan's "manual via Railway CLI"
+  becomes "Save button in the UI, with CLI as admin fallback."
+- **Library concept:** libraries are now first-class entities in
+  the registry. Modes in YAML can reference them by name. Existing
+  modes are NOT refactored — new modes get the new pattern, old
+  modes keep working.
+- **Canva:** treated as a single canonical library, not as
+  duplicate content sprawled across IG/blog/lead-magnet folders.
+
+### What did NOT change
+
+- The four content collections (`rf_coaching_transcripts`,
+  `rf_reference_library`, `rf_internal_education`,
+  `rf_published_content`) — all locked, all going to ChromaDB
+- Vertex AI for vision calls
+- FKSP-as-pilot
+- One-off Railway worker job topology
+- The locked decisions in HANDOVER_SESSION_20260411_CLOSE.md
+
+---
+
 ## TL;DR for the next Claude session
 
 You are picking up a major content ingestion build for the Reimagined Fertility RAG system. Two new ChromaDB collections are being created:
