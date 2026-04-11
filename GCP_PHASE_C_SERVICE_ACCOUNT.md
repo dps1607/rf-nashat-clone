@@ -271,3 +271,70 @@ Step 5 again.
 *Walkthrough written 2026-04-11 after the Phase B pilot discovered that
 Google Drive no longer accepts pending shares to non-existent service
 accounts. Phase C now blocks Phase B.*
+
+---
+
+## Phase C completion log — 2026-04-11
+
+Phase C was completed end-to-end on 2026-04-11 in the same session as
+ADRs 001-004 and the Phase B pilot. Recording the actual outcomes here
+so future readers know what landed and what didn't.
+
+### What was done
+
+- ✅ GCP Console verified on `rf-rag-ingester-493016`, project number
+  `577782593839`, dan@reimagined-health.com, free trial active with
+  $300 credit and 90 days remaining.
+- ✅ Google Drive API enabled (`drive.googleapis.com`).
+- ✅ Vertex AI API enabled (`aiplatform.googleapis.com`).
+- ✅ Service account `rf-ingester` created with email
+  `rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`
+  (matches `config.py SERVICE_ACCOUNT_EMAIL` exactly).
+- ✅ Vertex AI User role granted at the project level (no Drive-level
+  project roles, per ADR-001 — Drive access is granted per-drive in
+  Phase B).
+- ✅ JSON key generated. Key ID:
+  `5de3e05cec61ce7ece287364823074a99f190dc8` (this ID is a public
+  identifier, not the key material).
+- ✅ JSON key uploaded to Railway as `GOOGLE_SERVICE_ACCOUNT_JSON` env
+  var on the rf-nashat-clone admin service.
+- ✅ Local JSON file deleted from Downloads, Trash emptied.
+- ✅ Daniel handled steps 5-7 (key generation, Railway upload, local
+  delete) directly without Claude in Chrome being in the tab during
+  any moment when key bytes could be on screen.
+
+### What was deferred
+
+- **Local smoke test of the credential.** The walkthrough's optional
+  Step 8 (run a Python smoke test against `drive_client.py`) was not
+  run during this session. Reason: it requires the env var to be set
+  locally too, and Daniel only set it on Railway. Not a blocker —
+  Phase D-prime (folder-walk inventory) will exercise the credential
+  for real and is a more meaningful test than the smoke check.
+- **Separate Railway ingester service.** The env var was added to the
+  existing admin service rather than a new dedicated ingester service.
+  When the actual ingester gets wired up to Railway later, the var
+  may need to be copied to the new service or the services may end up
+  sharing the var. Not a blocker for Phase B.
+
+### Notes for future rotation
+
+The key has no expiration (`Dec 31, 9999`). Per ADR-001's compensating
+control, manual quarterly rotation is the plan. Next rotation due:
+**~July 11, 2026** (90 days from creation).
+
+To rotate:
+1. GCP Console → Service Accounts → rf-ingester → Keys tab
+2. Click "Add Key" → "Create new key" → JSON
+3. Update Railway `GOOGLE_SERVICE_ACCOUNT_JSON` with the new key
+4. Verify the ingester still works (run a quick Drive list)
+5. Delete the OLD key from the Keys tab (the trash icon next to it)
+6. Delete the new JSON file from local disk
+
+### Phase B status after Phase C
+
+Phase B is now **unblocked**. The service account exists as a real
+Google account, so Drive will accept shares to its email. The Phase B
+walkthrough can be run as-is without modification. The click sequence
+was already validated during the 2026-04-11 pilot up to (but not
+including) the final Share button.
