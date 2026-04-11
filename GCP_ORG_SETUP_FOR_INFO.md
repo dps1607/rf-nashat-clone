@@ -5,9 +5,10 @@ super-admin account.
 
 **Purpose:** establish a proper Google Cloud Platform (GCP) organization
 under the `reimagined-health.com` Workspace domain, create an organization-
-level billing account, grant `dan@reimagined-health.com` the IAM roles
-needed to operate inside the org, and migrate the existing orphan
-`rf-rag-ingester` project into the org so it inherits the new structure.
+level billing account, allow service accounts to be members of Shared
+Drives, grant `dan@reimagined-health.com` the IAM roles needed to operate
+inside the org, and migrate the existing orphan `rf-rag-ingester` project
+into the org so it inherits the new structure.
 
 **Why this matters:** the Reimagined Fertility RAG system processes
 proprietary clinical methodology (the FKSP curriculum, the 25 QPTs,
@@ -40,6 +41,12 @@ There is currently a project named `rf-rag-ingester` that was created today
 under `dan@reimagined-health.com` without an org attached. This walkthrough
 will end with that project living inside the new org and pointing at a
 new org-level billing account.
+
+The Reimagined Fertility course content lives in **Workspace Shared Drives**
+(not personal My Drive). That introduces one extra wrinkle that step 2.5
+addresses — the default Workspace policy treats service accounts as
+"external users," which can silently break the ingester later if it's not
+fixed up front.
 
 ---
 
@@ -75,6 +82,61 @@ This is a no-op for most paid Workspace customers but worth checking.
 6. If you do NOT see an organization entry, stop and tell Dan. It means
    Cloud Identity needs additional setup steps that vary by Workspace
    plan, and we'll need to debug.
+
+---
+
+## Step 2.5 — Allow service accounts to be members of Shared Drives (CRITICAL)
+
+The Reimagined Fertility course content lives in Google Workspace **Shared
+Drives** (not personal My Drive). The ingester will access it via a Google
+Cloud **service account** — a special non-human user that can be granted
+read-only access to specific folders.
+
+By default, many Workspace orgs treat service accounts as "external users"
+because their email domain ends in `iam.gserviceaccount.com` rather than
+`reimagined-health.com`. If external membership in Shared Drives is locked
+down, the service account can be invited but its permissions will silently
+fail to take effect, which is one of the most painful debugging experiences
+in Google Cloud.
+
+**Do this step before Dan tries to share any folder with the service account:**
+
+1. Go to https://admin.google.com while logged in as `info@`
+2. Hamburger menu → **Apps → Google Workspace → Drive and Docs**
+3. Click **Sharing settings**
+4. Find the section **Sharing options** (the org-wide defaults for Drive sharing)
+5. Look at **Sharing outside of reimagined-health.com**:
+   - Should be **ON**, with **"Allow users to receive files from outside
+     reimagined-health.com"** enabled
+   - **"Warn when files owned by users or shared drives in
+     reimagined-health.com are shared outside of reimagined-health.com"**
+     should also be enabled
+   - This is a sensible default — allows the service account as a member
+     without making the org wide open
+6. Find **Access Checker** and set it to **"Recipients only, or
+   reimagined-health.com"** (the most common safe setting)
+7. Save changes
+
+**Additional controls to verify on the same page (depending on Workspace plan):**
+
+8. Look for **"Allow members with manager access to share folders with
+   people outside their organization"** — should be ON
+9. Look for **"Distributing content outside of reimagined-health.com"** —
+   should allow it, ideally with the warning enabled
+
+**If you cannot find these settings, or they look different from what's
+described, do NOT change anything. Stop and message Dan.** Drive sharing
+settings affect every user in the org, and a wrong toggle can either
+lock down legitimate sharing or open up unintended exposure.
+
+**Why this matters in plain language:** without this step, when Dan tries
+to share the FKSP Shared Drive folder with the service account, one of
+two bad things happens. Either Google rejects the share outright with a
+"this user is outside your organization" error, or — worse — Google
+*accepts* the share, the service account appears in the member list,
+but the API calls fail with `403 insufficientFilePermissions` because
+the membership wasn't actually applied. The latter is a confusing 30-
+minute debugging session that this 2-minute admin step prevents.
 
 ---
 
@@ -142,17 +204,54 @@ the account but not change it.
 
 ---
 
-## Step 5 — Migrate the existing rf-rag-ingester project into the org
+## Step 5 — Add the service account as a member of the FKSP Shared Drive
+
+This step happens **after** Dan creates the service account inside the
+`rf-rag-ingester` GCP project, so it's a future step but it belongs in
+this doc because it's a Workspace admin action that `info@` (or another
+Shared Drive Manager) needs to do.
+
+**Dan will give you the service account email when the time comes.** It
+will look like:
+`rf-ingester@rf-rag-ingester.iam.gserviceaccount.com`
+(possibly with extra digits in the project ID).
+
+When Dan asks you to do this:
+
+1. Open https://drive.google.com while logged in as `info@`
+2. In the left sidebar, click **Shared drives**
+3. Find and double-click the Shared Drive that contains the FKSP folder
+   (the one Dan referenced — folder ID `1b_HQqzLCXfOjMXSDB_W2sUF9loJziZ2b`)
+4. At the top right of the Shared Drive view, click **Manage members**
+   (the people-icon button)
+5. In the "Add people and groups" field, paste the service account email
+   Dan gave you
+6. Set the role to **Viewer** (NOT Manager, NOT Content Manager — Viewer
+   is read-only and is exactly what we want)
+7. **Uncheck** "Notify people" (the service account can't read email anyway)
+8. Click **Send** (or **Share**)
+
+**Verification:** the service account should now appear in the member
+list with a Viewer badge. If it shows a warning about external users,
+that's expected — you allowed external sharing in step 2.5, so this is
+the warning firing as designed.
+
+**Why this matters:** the ingester walks the FKSP folder tree using the
+service account's credentials. Without Viewer membership on the Shared
+Drive, the API calls return empty file lists with no error — another
+silent failure mode that's painful to debug.
+
+---
+
+## Step 6 — Migrate the existing rf-rag-ingester project into the org
 
 Right now `rf-rag-ingester` lives orphaned under Dan's account with no org
 attachment. This step moves it into the new org so it inherits everything.
 
 **Note:** this step requires Dan to be logged in (not info@), because the
-project is currently owned by Dan. Dan should do this part. The
-instructions are below for completeness, but please pass them to Dan
+project is currently owned by Dan. **Dan will do this part himself.**
+The instructions are below for completeness, but please pass them to Dan
 rather than doing them yourself.
-
----
 
 ### Instructions for DAN to run after info@ finishes steps 1-4
 
@@ -176,7 +275,7 @@ inheriting org-level IAM, and ready to have APIs enabled.
 
 ---
 
-## Step 6 — Verify
+## Step 7 — Verify the whole thing
 
 After all of the above, confirm the following from `dan@`'s account:
 
@@ -190,7 +289,7 @@ After all of the above, confirm the following from `dan@`'s account:
 
 If all three check out, the GCP foundation is in place and Dan can resume
 the ingester build (enabling Drive API + Vertex AI, creating the service
-account, etc.).
+account, sharing the FKSP Shared Drive, and so on).
 
 ---
 
