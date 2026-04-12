@@ -385,7 +385,11 @@ def api_folder_children(folder_id):
     if not drive_id:
         return jsonify({"error": "drive_id query param required"}), 400
     if not drive_api.is_available():
-        return jsonify({"error": "Drive API not available", "children": []}), 503
+        # Fallback: serve from cached manifest
+        children = manifest.get_folder_children(folder_id)
+        if children is not None:
+            return jsonify({"children": children})
+        return jsonify({"error": "Drive API not available and folder not in manifest", "children": []}), 503
     try:
         children = drive_api.list_children_for_tree(folder_id, drive_id)
         return jsonify({"children": children})

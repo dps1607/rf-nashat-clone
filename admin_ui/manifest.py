@@ -104,6 +104,48 @@ class ManifestLoader:
         return sum(1 for e in self._folder_index
                    if q in e["path"].lower() or q in e["name"].lower())
 
+    def get_folder_children(self, folder_id: str) -> list[dict] | None:
+        """Look up a folder by ID in the manifest and return its children.
+
+        Returns a list of {id, name, is_folder, children, file_count_direct}
+        dicts matching the live API shape, or None if the folder is not found.
+        """
+        if not self._manifest:
+            return None
+        for drive in self._manifest.get("drives", []):
+            if drive.get("status") != "walked":
+                continue
+            result = self._find_node(drive.get("root", {}), folder_id)
+            if result is not None:
+                return self._node_children_to_api_shape(result)
+        return None
+
+    def _find_node(self, node: dict, folder_id: str) -> dict | None:
+        """Recursively find a node by folder ID in the manifest tree."""
+        if node.get("id") == folder_id:
+            return node
+        for sub in node.get("subfolders", []):
+            found = self._find_node(sub, folder_id)
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _node_children_to_api_shape(node: dict) -> list[dict]:
+        """Convert manifest subfolders to the same shape the live API returns."""
+        children = []
+        for sub in node.get("subfolders", []):
+            children.append({
+                "id": sub["id"],
+                "name": sub.get("name", ""),
+                "is_folder": True,
+                "children": [],
+                "file_count_direct": sub.get("file_count_direct", 0),
+            })
+        # Folders first (already are), sorted alphabetically
+        children.sort(key=lambda x: x["name"].lower())
+        return children
+
     def get_drive_tree(self, slug: str) -> dict | None:
         """Return the full tree for a specific drive from the manifest."""
         if not self._manifest:
