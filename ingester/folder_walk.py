@@ -79,6 +79,7 @@ def _walk_folder(
         "path": folder_path,
         "depth": depth,
         "file_count_direct": 0,
+        "files": [],
         "subfolders": [],
     }
 
@@ -104,12 +105,18 @@ def _walk_folder(
                 "path": child_path,
                 "depth": depth + 1,
                 "file_count_direct": 0,
+                "files": [],
                 "subfolders": [],
             }
             node["subfolders"].append(child_node)
             queue.append((child_node, child["id"], child_name, child_path, depth + 1))
         else:
             node["file_count_direct"] += 1
+            node["files"].append({
+                "id": child["id"],
+                "name": child.get("name", "<unnamed>"),
+                "mimeType": mime,
+            })
 
     # BFS the rest
     while queue:
@@ -132,12 +139,18 @@ def _walk_folder(
                     "path": child_path,
                     "depth": fdepth + 1,
                     "file_count_direct": 0,
+                    "files": [],
                     "subfolders": [],
                 }
                 parent_node["subfolders"].append(child_node)
                 queue.append((child_node, child["id"], child_name, child_path, fdepth + 1))
             else:
                 parent_node["file_count_direct"] += 1
+                parent_node["files"].append({
+                    "id": child["id"],
+                    "name": child.get("name", "<unnamed>"),
+                    "mimeType": mime,
+                })
 
     return node
 

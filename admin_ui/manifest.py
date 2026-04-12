@@ -132,8 +132,16 @@ class ManifestLoader:
 
     @staticmethod
     def _node_children_to_api_shape(node: dict) -> list[dict]:
-        """Convert manifest subfolders to the same shape the live API returns."""
+        """Convert manifest node children to the same shape the live API returns.
+
+        Emits subfolders (is_folder: true) then files (is_folder: false),
+        each group sorted alphabetically. If the manifest has a `files`
+        array (new-format walk), real file metadata is used. Otherwise
+        falls back to synthetic placeholders from file_count_direct.
+        """
         children = []
+
+        # Subfolders
         for sub in node.get("subfolders", []):
             children.append({
                 "id": sub["id"],
@@ -142,8 +150,32 @@ class ManifestLoader:
                 "children": [],
                 "file_count_direct": sub.get("file_count_direct", 0),
             })
-        # Folders first (already are), sorted alphabetically
         children.sort(key=lambda x: x["name"].lower())
+
+        # Files
+        files_array = node.get("files")
+        if files_array:
+            # New-format manifest — real file metadata
+            file_entries = []
+            for f in files_array:
+                file_entries.append({
+                    "id": f["id"],
+                    "name": f.get("name", "<unnamed>"),
+                    "is_folder": False,
+                })
+            file_entries.sort(key=lambda x: x["name"].lower())
+            children.extend(file_entries)
+        else:
+            # Old-format manifest — synthetic placeholders from count
+            file_count = node.get("file_count_direct", 0)
+            parent_id = node.get("id", "unknown")
+            for i in range(file_count):
+                children.append({
+                    "id": f"{parent_id}__file_{i}",
+                    "name": f"File {i + 1}",
+                    "is_folder": False,
+                })
+
         return children
 
     def get_drive_tree(self, slug: str) -> dict | None:
