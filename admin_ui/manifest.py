@@ -132,8 +132,18 @@ class ManifestLoader:
 
     @staticmethod
     def _node_children_to_api_shape(node: dict) -> list[dict]:
-        """Convert manifest subfolders to the same shape the live API returns."""
+        """Convert manifest node children to the same shape the live API returns.
+
+        The manifest stores subfolders with full metadata but only stores a
+        file *count* (file_count_direct) — not individual file records. When
+        files exist, we emit synthetic placeholder entries so the UI renders
+        them rather than showing an empty expansion. Each placeholder has a
+        deterministic ID derived from the parent folder ID so checkbox state
+        is stable across reloads.
+        """
         children = []
+
+        # Subfolders — full metadata available
         for sub in node.get("subfolders", []):
             children.append({
                 "id": sub["id"],
@@ -142,8 +152,21 @@ class ManifestLoader:
                 "children": [],
                 "file_count_direct": sub.get("file_count_direct", 0),
             })
-        # Folders first (already are), sorted alphabetically
         children.sort(key=lambda x: x["name"].lower())
+
+        # Files — manifest only has a count, not individual records.
+        # Emit one placeholder per file so the UI shows the correct number
+        # of entries. Names are "File 1", "File 2", etc. (the live API path
+        # returns real names; this is the offline-fallback tradeoff).
+        file_count = node.get("file_count_direct", 0)
+        parent_id = node.get("id", "unknown")
+        for i in range(file_count):
+            children.append({
+                "id": f"{parent_id}__file_{i}",
+                "name": f"File {i + 1}",
+                "is_folder": False,
+            })
+
         return children
 
     def get_drive_tree(self, slug: str) -> dict | None:
