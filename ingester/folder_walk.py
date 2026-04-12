@@ -116,6 +116,12 @@ def _walk_folder(
                 "id": child["id"],
                 "name": child.get("name", "<unnamed>"),
                 "mimeType": mime,
+                "size": child.get("size"),
+                "modifiedTime": child.get("modifiedTime"),
+                "createdTime": child.get("createdTime"),
+                "webViewLink": child.get("webViewLink"),
+                "md5Checksum": child.get("md5Checksum"),
+                "owners": child.get("owners"),
             })
 
     # BFS the rest
@@ -150,6 +156,12 @@ def _walk_folder(
                     "id": child["id"],
                     "name": child.get("name", "<unnamed>"),
                     "mimeType": mime,
+                    "size": child.get("size"),
+                    "modifiedTime": child.get("modifiedTime"),
+                    "createdTime": child.get("createdTime"),
+                    "webViewLink": child.get("webViewLink"),
+                    "md5Checksum": child.get("md5Checksum"),
+                    "owners": child.get("owners"),
                 })
 
     return node
