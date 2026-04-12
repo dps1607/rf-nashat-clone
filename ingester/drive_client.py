@@ -103,16 +103,27 @@ class DriveClient:
         """
         raw = credentials_json or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
         if not raw:
+            cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            if cred_path:
+                try:
+                    with open(cred_path, "r") as f:
+                        raw = f.read()
+                except OSError as e:
+                    raise RuntimeError(
+                        f"GOOGLE_APPLICATION_CREDENTIALS points to "
+                        f"{cred_path!r} but the file could not be read: {e}"
+                    ) from e
+        if not raw:
             raise RuntimeError(
-                "GOOGLE_SERVICE_ACCOUNT_JSON env var is not set. "
-                "Export the service account JSON key as an env var "
-                "before running the ingester."
+                "No Drive credentials found. Set either "
+                "GOOGLE_SERVICE_ACCOUNT_JSON (raw JSON, Railway-style) or "
+                "GOOGLE_APPLICATION_CREDENTIALS (file path, local-dev-style)."
             )
         try:
             info = json.loads(raw)
         except json.JSONDecodeError as e:
             raise RuntimeError(
-                "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. "
+                "Service account credentials are not valid JSON. "
                 f"Parse error: {e}"
             )
         creds = service_account.Credentials.from_service_account_info(
