@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Content Selection — Nashat Admin{% endblock %}
+
+{% block content %}
+<div class="folders-layout">
+  <div class="folders-header">
+    <h1 class="folders-title">Content Selection</h1>
+    <div class="folders-meta">
+      {% if walk_metadata.walk_finished_at %}
+      <span class="meta-text">
+        Last inventory: {{ walk_metadata.walk_finished_at[:19] | replace('T', ' ') }} UTC
+        &middot; {{ walk_metadata.drives_accessible }}/{{ walk_metadata.drives_expected }} drives
+      </span>
+      {% else %}
+      <span class="meta-text meta-warning">No inventory loaded — run folder_walk.py first</span>
+      {% endif %}
+      <button class="btn-secondary btn-sm" id="btn-refresh" title="Reload manifest from disk">Refresh Inventory</button>
+    </div>
+  </div>
+
+  <div class="folders-toolbar">
+    <div class="search-container">
+      <input type="text" id="folder-search" class="search-input"
+             placeholder="Search folders across all drives..." autocomplete="off">
+      <div id="search-results" class="search-results hidden"></div>
+    </div>
+    <button class="btn-primary" id="btn-save">Save Selection</button>
+  </div>
+
+  <div class="folder-tree" id="folder-tree">
+    {% for drive in drives %}
+    <div class="tree-drive {% if drive.status == 'not_shared' %}drive-disabled{% endif %}"
+         data-slug="{{ drive.slug }}"
+         data-drive-id="{{ drive.drive_id or '' }}"
+         data-sensitive="{{ 'true' if drive.sensitive_flag else 'false' }}"
+         data-total-folders="{{ drive.total_folders }}"
+         data-total-files="{{ drive.total_files }}">
+      <div class="tree-node tree-node-drive">
+        {% if drive.status != 'not_shared' %}
+        <span class="tree-toggle expandable" role="button" tabindex="0" aria-label="Expand {{ drive.drive_name_google or drive.slug }}">&#9654;</span>
+        {% else %}
+        <span class="tree-toggle disabled">&nbsp;</span>
+        {% endif %}
+        <input type="checkbox" class="tree-check drive-check"
+               data-slug="{{ drive.slug }}"
+               data-id="{{ drive.drive_id or '' }}"
+               {% if drive.status == 'not_shared' %}disabled{% endif %}>
+        <span class="drive-name">{{ drive.drive_name_google or drive.slug }}</span>
+        {% if drive.sensitive_flag %}
+        <span class="sensitive-flag" title="Flagged: sensitive content">&#x1F512;</span>
+        {% endif %}
+        {% if drive.status == 'not_shared' %}
+        <span class="status-badge status-not-shared">Not shared</span>
+        {% else %}
+        <span class="drive-stats">{{ drive.total_folders }} folders &middot; {{ drive.total_files }} files</span>
+        {% endif %}
+      </div>
+      <div class="tree-children hidden" data-loaded="false"></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Sensitive drive confirmation modal -->
+<div id="sensitive-modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h3 class="modal-title">&#x26A0;&#xFE0F; Flagged Drive</h3>
+    <p>Drive <strong id="modal-drive-name"></strong> is flagged as containing sensitive content.
+       Are you sure you want to include content from this drive in the RAG?</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn-primary btn-caution" id="modal-confirm">Yes, include</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="save-toast" class="toast hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<link rel="stylesheet" href="{{ url_for('static', filename='folder-tree.css') }}">
+<script src="{{ url_for('static', filename='folder-tree.js') }}"></script>
+<script src="{{ url_for('static', filename='folder-search.js') }}"></script>
+{% endblock %}

@@ -40,6 +40,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from admin_ui import audit
+from admin_ui.manifest import ManifestLoader
+from admin_ui import drive_api
 from admin_ui.auth import (
     CLOUDFLARE_ACCESS_ENABLED,
     authenticate, login_user, logout_user, current_user, login_required,
@@ -124,6 +126,9 @@ audit.log("startup", user="-system-", details={
     "config_dir": str(CONFIG_DIR),
     "rag_server_url": RAG_SERVER_URL,
 })
+
+# Load the most recent folder-walk manifest for the folder-selection UI
+manifest = ManifestLoader()
 
 
 # -----------------------------------------------------------------------------
@@ -300,6 +305,162 @@ def api_health():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"status": "unreachable", "error": str(e)}), 502
+
+
+# -----------------------------------------------------------------------------
+# Folder-selection UI routes (Phase D-post)
+# -----------------------------------------------------------------------------
+
+@app.route("/admin/folders")
+@login_required
+def folders():
+    """Render the folder-selection page."""
+    from ingester import config as ingester_config
+    drives = manifest.drives
+    sensitive_slugs = ingester_config.SENSITIVE_DRIVE_SLUGS
+    for d in drives:
+        d["sensitive_flag"] = d.get("slug", "") in sensitive_slugs
+    return render_template(
+        "folders.html",
+        drives=drives,
+        walk_metadata=manifest.walk_metadata,
+    )
+
+
+@app.route("/admin/api/drive/<drive_id>/tree")
+@login_required
+def api_drive_tree(drive_id):
+    """Return two-level folder tree for a drive. Live API with manifest fallback."""
+    slug = request.args.get("slug", "")
+
+    if drive_api.is_available():
+        try:
+            tree = drive_api.get_two_level_tree(drive_id)
+            return jsonify(tree)
+        except Exception as e:
+            # Fall through to manifest fallback
+            pass
+
+    # Fallback: extract two levels from manifest
+    drive_data = manifest.get_drive_tree(slug)
+    if not drive_data or not drive_data.get("root"):
+        return jsonify({"children": [], "root_file_count": 0})
+
+    root = drive_data["root"]
+    children = []
+    for sub in root.get("subfolders", []):
+        child = {
+            "id": sub["id"],
+            "name": sub.get("name", ""),
+            "is_folder": True,
+            "children": [],
+            "file_count_direct": sub.get("file_count_direct", 0),
+        }
+        for subsub in sub.get("subfolders", []):
+            child["children"].append({
+                "id": subsub["id"],
+                "name": subsub.get("name", ""),
+                "is_folder": True,
+                "children": [],
+                "file_count_direct": subsub.get("file_count_direct", 0),
+            })
+        # Include files info for depth-1 nodes
+        file_count = sub.get("file_count_direct", 0)
+        if file_count:
+            child["file_count_direct"] = file_count
+        children.append(child)
+
+    # Include root-level file count for flat drives (e.g. 8-labs)
+    return jsonify({
+        "children": children,
+        "root_file_count": root.get("file_count_direct", 0),
+    })
+
+
+@app.route("/admin/api/folder/<folder_id>/children")
+@login_required
+def api_folder_children(folder_id):
+    """Return one level of children for a folder (lazy deeper loading)."""
+    drive_id = request.args.get("drive_id", "")
+    if not drive_id:
+        return jsonify({"error": "drive_id query param required"}), 400
+    if not drive_api.is_available():
+        return jsonify({"error": "Drive API not available", "children": []}), 503
+    try:
+        children = drive_api.list_children_for_tree(folder_id, drive_id)
+        return jsonify({"children": children})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/api/folders/search")
+@login_required
+def api_folders_search():
+    """Search manifest folder paths by substring."""
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"results": [], "total": 0, "showing": 0})
+    results = manifest.search_folders(q, limit=20)
+    total = manifest.count_search_results(q)
+    return jsonify({
+        "results": results,
+        "total": total,
+        "showing": len(results),
+    })
+
+
+@app.route("/admin/api/folders/save", methods=["POST"])
+@login_required
+def api_folders_save():
+    """Save folder selection state to JSON file."""
+    import json as json_mod
+
+    user = current_user()
+    user_label = _user_label(user)
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+
+    state_path = Path(os.environ.get("INGESTER_DATA_ROOT", "data")) / "selection_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json_mod.dumps(data, indent=2, default=str))
+
+    folder_count = len(data.get("selected_folders", []))
+    audit.log("folder_selection_saved", user=user_label, details={
+        "selected_folders": folder_count,
+        "libraries": list(data.get("library_assignments", {}).keys()),
+    })
+    return jsonify({"ok": True, "saved_folders": folder_count})
+
+
+@app.route("/admin/api/folders/refresh-inventory", methods=["POST"])
+@login_required
+def api_refresh_inventory():
+    """Reload manifest from disk (after a new folder_walk run)."""
+    user_label = _user_label(current_user())
+    ok = manifest.load()
+    audit.log("inventory_refreshed", user=user_label, details={"success": ok})
+    return jsonify({"ok": ok, "drives": len(manifest.drives)})
+
+
+@app.route("/admin/audit")
+@login_required
+def audit_view():
+    """Render the audit log view."""
+    return render_template("audit.html")
+
+
+@app.route("/admin/api/audit/events")
+@login_required
+def api_audit_events():
+    """Return recent audit events as JSON."""
+    n = request.args.get("n", 100, type=int)
+    events = audit.tail(n)
+    action_filter = request.args.get("action", "")
+    if action_filter:
+        events = [e for e in events if e.get("event") == action_filter]
+    # Return newest first
+    return jsonify({"events": list(reversed(events))})
 
 
 @app.errorhandler(429)

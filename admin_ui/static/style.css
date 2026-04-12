@@ -63,7 +63,18 @@ a:hover { color: var(--coral); }
   border-bottom: 1px solid var(--gray-light);
   box-shadow: var(--shadow-sm);
 }
-.topbar-left { display: flex; align-items: center; gap: 16px; }
+.topbar-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.topbar-nav { display: flex; gap: 4px; margin-left: 8px; }
+.nav-link {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray);
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.nav-link:hover { color: var(--navy); background: var(--rose-pale); }
 .brand {
   font-family: var(--serif);
   font-size: 22px;

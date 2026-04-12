@@ -1,0 +1,436 @@
+/* ============================================================
+   Folder-selection UI — Phase D-post
+   Uses CSS vars from style.css (--navy, --rose, --coral, etc.)
+   ============================================================ */
+
+/* Layout */
+.folders-layout {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.folders-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.folders-title {
+  font-family: var(--serif, 'Cormorant Garamond', serif);
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--navy, #142A40);
+  margin: 0;
+}
+
+.folders-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.meta-text {
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.8rem;
+  color: var(--gray, #8C8589);
+}
+
+.meta-warning {
+  color: var(--coral, #F37C7B);
+}
+
+/* Toolbar */
+.folders-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.search-container {
+  position: relative;
+  flex: 1;
+  max-width: 400px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 6px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.875rem;
+  color: var(--charcoal, #3A393A);
+  background: var(--white, #FFFFFF);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input:focus {
+  border-color: var(--navy, #142A40);
+}
+
+.search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--white, #FFFFFF);
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 4px 12px rgba(20, 42, 64, 0.12);
+  z-index: 100;
+}
+
+.search-result-item {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--off-white, #FBFBFB);
+}
+
+.search-result-item:hover {
+  background: var(--rose-pale, #faeeec);
+}
+
+.search-result-drive {
+  color: var(--gray, #8C8589);
+  font-size: 0.7rem;
+  margin-right: 0.5rem;
+}
+
+.search-result-path {
+  color: var(--charcoal, #3A393A);
+}
+
+.search-result-path mark {
+  background: var(--rose-light, #f0d9d4);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.search-more {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--gray, #8C8589);
+  font-style: italic;
+}
+
+/* Buttons */
+.btn-primary {
+  padding: 0.5rem 1.25rem;
+  background: var(--navy, #142A40);
+  color: var(--white, #FFFFFF);
+  border: none;
+  border-radius: 6px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: var(--navy-soft, #1f3a55);
+}
+
+.btn-secondary {
+  padding: 0.4rem 1rem;
+  background: transparent;
+  color: var(--navy, #142A40);
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 6px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.btn-secondary:hover {
+  border-color: var(--navy, #142A40);
+}
+
+.btn-sm {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.btn-caution {
+  background: var(--coral, #F37C7B);
+}
+
+.btn-caution:hover {
+  background: #e06b6a;
+}
+
+/* Tree */
+.folder-tree {
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 8px;
+  background: var(--white, #FFFFFF);
+  overflow: hidden;
+}
+
+.tree-drive {
+  border-bottom: 1px solid var(--off-white, #FBFBFB);
+}
+
+.tree-drive:last-child {
+  border-bottom: none;
+}
+
+.drive-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.drive-disabled .tree-check {
+  pointer-events: auto;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.875rem;
+  color: var(--charcoal, #3A393A);
+  user-select: none;
+}
+
+.tree-node:hover {
+  background: var(--off-white, #FBFBFB);
+}
+
+.tree-node-drive {
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--off-white, #FBFBFB);
+}
+
+.tree-node-drive:hover {
+  background: var(--rose-pale, #faeeec);
+}
+
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.65rem;
+  color: var(--gray, #8C8589);
+  cursor: pointer;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.tree-toggle.expandable:hover {
+  color: var(--navy, #142A40);
+}
+
+.tree-toggle.expanded {
+  transform: rotate(90deg);
+}
+
+.tree-toggle.disabled {
+  cursor: default;
+}
+
+.tree-toggle.loading {
+  animation: spin 0.8s linear infinite;
+  font-size: 0.7rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.tree-check {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--navy, #142A40);
+  cursor: pointer;
+}
+
+.drive-name {
+  font-weight: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sensitive-flag {
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.status-badge {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.status-not-shared {
+  background: var(--gray-light, #D2D0D2);
+  color: var(--charcoal, #3A393A);
+}
+
+.drive-stats {
+  font-size: 0.75rem;
+  color: var(--gray, #8C8589);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Child containers — indented */
+.tree-children {
+  /* Indent is set per-level via inline style */
+}
+
+.tree-children .tree-node {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.folder-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-file-count {
+  font-size: 0.7rem;
+  color: var(--gray, #8C8589);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.file-node .folder-name {
+  color: var(--gray, #8C8589);
+  font-style: italic;
+}
+
+/* Flat drive message (e.g. 8-labs) */
+.flat-drive-msg {
+  padding: 0.5rem 0.75rem 0.5rem 2.75rem;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.8rem;
+  color: var(--gray, #8C8589);
+  font-style: italic;
+}
+
+/* Highlight for search-navigate */
+.tree-node.highlighted {
+  background: var(--rose-light, #f0d9d4);
+  transition: background 0.3s;
+}
+
+/* Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 42, 64, 0.5);
+}
+
+.modal-content {
+  position: relative;
+  background: var(--white, #FFFFFF);
+  border-radius: 10px;
+  padding: 1.5rem 2rem;
+  max-width: 440px;
+  width: 90%;
+  box-shadow: 0 8px 24px rgba(20, 42, 64, 0.2);
+}
+
+.modal-title {
+  font-family: var(--serif, 'Cormorant Garamond', serif);
+  font-size: 1.25rem;
+  color: var(--navy, #142A40);
+  margin: 0 0 0.75rem;
+}
+
+.modal-content p {
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.875rem;
+  color: var(--charcoal, #3A393A);
+  line-height: 1.5;
+  margin: 0 0 1.25rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--navy, #142A40);
+  color: var(--white, #FFFFFF);
+  border-radius: 8px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.85rem;
+  box-shadow: 0 4px 12px rgba(20, 42, 64, 0.25);
+  z-index: 2000;
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.toast.toast-success {
+  background: var(--success, #2c8d5a);
+}
+
+.toast.toast-error {
+  background: var(--error, #c0392b);
+}
+
+/* Hidden utility */
+.hidden {
+  display: none !important;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .folders-header {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .folders-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-container {
+    max-width: none;
+  }
+}
