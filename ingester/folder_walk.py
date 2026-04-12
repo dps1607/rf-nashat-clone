@@ -172,7 +172,7 @@ def _list_drive_children(client: DriveClient, drive_id: str, folder_id: str) -> 
                     client._service.files()
                     .list(
                         q=f"'{folder_id}' in parents and trashed = false",
-                        fields="nextPageToken, files(id, name, mimeType)",
+                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, webViewLink, md5Checksum, owners(emailAddress))",
                         pageSize=1000,
                         pageToken=page_token,
                         supportsAllDrives=True,
