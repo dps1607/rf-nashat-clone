@@ -49,3 +49,6 @@ config/admin_users.json
 # Flask session storage
 .flask_session/
 flask_session/
+
+# Local data directory (inventories, manifests, assets)
+data/

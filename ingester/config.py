@@ -140,3 +140,31 @@ GCP_BILLING_ACCOUNT_ID = os.environ.get("GCP_BILLING_ACCOUNT_ID")
 GCP_BILLING_ACCOUNT_NAME = os.environ.get(
     "GCP_BILLING_ACCOUNT_NAME", "My Billing Account (free trial)"
 )
+
+# ---------------------------------------------------------------------------
+# Shared Drive IDs (Phase D-prime — folder-walk inventory)
+#
+# Maps slug → Google Drive ID for every Shared Drive the ingester needs to
+# walk. IDs are populated after the first --discover run.  If a drive is
+# not visible to the service account (Phase B sharing incomplete), its ID
+# will remain "" and the walk will mark it as "not_shared".
+# ---------------------------------------------------------------------------
+SHARED_DRIVE_IDS: dict[str, str] = {
+    "0-shared-drive-content-outline": "",                # not shared with SA
+    "1-operations": "0AFn8_syivpiXUk9PVA",
+    "2-sales-relationships": "0AGG6os8UbberUk9PVA",
+    "3-marketing": "0AG5ixXZq2uo_Uk9PVA",
+    "4-finance": "",                                     # not shared with SA
+    "5-hr-legal": "",                                    # not shared with SA
+    "6-ideas-planning-research": "0AAsWNXUSwHmLUk9PVA",
+    "7-supplements": "0AH-CpaRZmgt0Uk9PVA",
+    "8-labs": "0AKCrxYWgoQIRUk9PVA",
+    "9-biocanic": "0APUPrV2jG6k6Uk9PVA",
+    "10-external-content": "0ANGL6R04Te5gUk9PVA",
+    "11-rh-transition": "0APsPzGypws_jUk9PVA",
+}
+
+# Drives that contain sensitive data (finance, HR/legal, labs).
+# The folder-walk still reads metadata from these drives (read-only),
+# but downstream selection UIs will require an extra confirmation step.
+SENSITIVE_DRIVE_SLUGS: set[str] = {"4-finance", "5-hr-legal", "8-labs"}
