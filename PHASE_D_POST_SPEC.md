@@ -80,9 +80,12 @@ Justification:
   the user immediately needs to click again to see anything useful. One
   click per drive is too shallow.
 - **Two-level prefetch** loads root subfolders AND their immediate children
-  on drive expand. Cost: 9 + 82 = **91 API calls** total if the user
-  expands every drive. In practice, users expand 2-3 drives per session,
-  so cost is ~20-30 calls. Each call returns in <200ms. Acceptable.
+  on drive expand. Cost: 9 + 82 = **91 API calls** total when all 9
+  drives are expanded. On a first-time setup pass — which is the primary
+  use case — the admin expands every drive to survey what's available,
+  so 91 calls is the realistic number, not a worst case. At <200ms per
+  call these can be parallelized per-drive; total wall time stays under
+  a few seconds. Acceptable.
 - **Full prefetch** is ruled out: the full walk made ~3,949 folder-level
   API calls and took 17 minutes. Not viable for UI load.
 - Two levels covers the "meaningful content" layer for most drives. For
