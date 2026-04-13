@@ -6,6 +6,107 @@ Updated in place each session-end. Read this first to resume.
 
 ---
 
+## Session 13 — 2026-04-13 — Wire scrub, redesign v2 guard, first v2 commit-run
+
+**Scope shipped:** triple-dedup edge case fixed in `scrub.py`, `scrub_text()` wired into `_drive_common.chunk_text()` as the single chokepoint for v1+v2, v2 low-yield guard redesigned from ratio-based to absolute-word-floor with usable-images check, dump-json skip-path bug fixed, persistent `skipped_files_log.jsonl` audit trail added, **first v2 commit-run landed: 11 chunks into local `rf_reference_library` (584 → 595).** Real spend: $0.0012 embeddings, $0 vision (54/54 cache hits). No Railway writes. No git operations by Claude.
+
+**Step 0 reality check:** PASSED all gates. One drift caught and surfaced immediately: session 12's work (scrub module + image review script) was uncommitted at session start — the bootstrap prompt claimed "session 12 committed" but `git log` showed `84fa22f session 11` as the top commit. Non-blocking (the prompt body itself allowed for either state), but worth flagging as exactly the kind of premise-vs-reality drift Step 0 exists to catch.
+
+### What landed
+
+1. **Scrub triple-dedup fix** (`ingester/text/scrub.py`). Added one pattern to `DEDUP_PATTERNS`: `CANONICAL\s*,\s*and\s+CANONICAL`. The existing pairwise `", "` pattern was collapsing the first two in `A, A, and A` to leave `A, and A` — which no existing pattern matched. The new pattern plus the existing 3-iteration stability loop now composes cleanly for arbitrary-length "and"-chain triples. Test battery at `scripts/test_scrub_s13.py` (19 cases including all session 12 positive/negative cases plus the triple plus negative controls for `body mass index`, `Merry Christmas`, `lean body mass and mass spectrometry`) — **19/19 passing**.
+
+2. **Scrub wired into the chunking chokepoint** (`ingester/loaders/_drive_common.py`). `chunk_text()` now imports `scrub_text` and applies it at both append sites (mid-loop chunk close and end-of-function trailing chunk). `word_count` is recomputed from the scrubbed text so it reflects what's actually stored, and `name_replacements` is added to the chunk dict. `build_metadata_base()` propagates `name_replacements` into chunk metadata via `chunk.get("name_replacements", 0)`. **Single chokepoint: both v1 and v2 get scrub coverage automatically**, no per-loader wiring. v1 regression dry-run against Supplement Info matches baseline byte-for-byte.
+
+3. **v2 low-yield guard redesigned** (`ingester/loaders/drive_loader_v2.py`). The inherited v1 ratio check (`stitched_chars / drive_size < 5%`) was semantically wrong for v2 — stitched OCR text compared to compressed-PNG byte size is apples-to-oranges and would skip legitimate image-heavy docs. Replaced with:
+
+   ```
+   MIN_STITCHED_WORDS_FLOOR = 50
+   skip as low_yield_even_with_vision IF
+       stitched_words < 50 AND usable_images == 0
+   ```
+
+   The `AND` is load-bearing: Canva IG posts (future `rf_published_content` work) are often short but carry one usable image, so the usable-images check protects them even with a tight word floor. Rationale cross-checked against the real 27-image OCR cache (median 28 words per usable image, 0 decorative, 0 failed).
+
+4. **v2 dump-json skip-path bug fixed.** Session 11 left `all_files_dumped.append(...)` missing on both skip paths (`low_yield_even_with_vision` and `vision_failure_rate_too_high`), so the dump-json only captured ingested files. Fix: both skip paths now append to `all_files_dumped` with full stitched text + per-image OCR records + `"skipped": true` + `"skip_reason"` flag. To make this work for the vision-failure path, `stitched_chars`/`stitched_words` computation moved above the failure-rate gate.
+
+5. **Persistent skipped-files audit log** (`data/skipped_files_log.jsonl`). New `log_skipped_file()` helper in `drive_loader_v2.py` appends one JSON line per skip decision, across all runs. Fields: `run_id`, `timestamp_utc`, `pipeline`, `reason`, `file_id`, `file_name`, `folder_id`, `folder_path`, `details`. Best-effort — write failures log a warning but do not block ingest. Grep-able, tail-able, easy to audit months later. Dan asked for "clear access to the skipped folder" and this is the persistent version of that ask. Gitignored under the existing `data/` rule.
+
+6. **Run summary now shows skip previews.** For each low-yield skip, the run summary prints `Nw stitched, X/Y usable images` plus a 160-char preview of the stitched text, so you see exactly what's being dropped before a commit.
+
+7. **First v2 commit-run.** After dry-run review and Dan's explicit `commit` approval: 3 files ingested (Professional Nutritionals FKP Schedule, Comprehensive List of Supplements and substitutions, Supplement Details), 1 skipped (spreadsheet via `unsupported_mime_v2` path), **11 total chunks written to local `rf_reference_library` (584 → 595 verified).** All 11 chunks queryable via `where={"source_pipeline": "drive_loader_v2"}`. `name_replacements` metadata populated correctly: 2 chunks show `=1` (the cover-image chunks from both image-heavy docs where the `Dr. Nashat Latib & Dr. Christina Massinople` byline lived), 9 show `=0`. **Leak check across all 11 committed chunks: 0 occurrences of "christina" or "massinople" (case-insensitive).** Run record written to `data/ingest_runs/8eb7bb77aedd4a4c.json` with all chunk IDs, fully reversible via `col.delete(ids=run_record["chunk_ids"])`.
+
+### Critical findings
+
+**The session 11 "halted on guard" was actually a latent `NameError`, not a legitimate skip.** Session 11's v2 used `LOW_YIELD_RATIO_THRESHOLD` and `LOW_YIELD_MIN_BYTES` in the body of `run()` without importing them. The broken session 11 dump (1 of 3 files) was v2 crashing on the first file that exceeded 10 KB — which for Supplement Info is every file. Neither session 11 nor session 12 caught this because session 12 detoured to the scrub work. Session 13's guard redesign replaces the whole broken block, so the NameError is moot — but it's worth recording so future sessions don't re-derive a misleading history from "session 11 halted on guard."
+
+**Commit-path errors get swallowed when stdout is piped through `| tail`.** The first Step 6 commit attempt failed with `openai.AuthenticationError: 401` (expired API key in `.env`), but `| tail -60` made the exit code look like 0 and the error scroll past. Had to re-run with `> /tmp/log 2>&1; echo $?` to see the real state. Paper cut worth remembering; a ~10-line OpenAI pre-flight check at the top of the commit path would have turned the 15-second failure into a 1-second one. On the session 14 backlog.
+
+**Security housekeeping done this session.** Two temp log files (`/tmp/s13_commit.log`, `/tmp/s13_commit2.log`) and one diagnostic script contained echoed API key fragments in OpenAI error output and were deleted immediately after diagnosis. `.env` sourced in subshells only, never read into chat context.
+
+### State of the world after session 13
+
+- `rf_reference_library` local: **595 chunks** (+11 vs start of session), of which 11 are `source_pipeline=drive_loader_v2` and the original 584 are the A4M Fertility Certification material from Lineage B.
+- `rf_coaching_transcripts` local: 9,224 chunks, **unchanged.**
+- Railway production: **untouched.** `console.drnashatlatib.com` still serving the 2026-04-09 deploy.
+- `data/selection_state.json`: **still the placeholder `["abc","def"]`.** Session 13 used `/tmp/rf_pilot_selection.json` as a bypass, just like sessions 10–12. Closing this gap is session 14's job — Gap 1 from STATE_OF_PLAY is still half-open.
+- `data/ingest_runs/8eb7bb77aedd4a4c.json`: new run record, reversible. (Gitignored by the existing `data/` rule; see open item.)
+- `data/skipped_files_log.jsonl`: **not yet written** (nothing tripped a content guard this session — the only skip was a spreadsheet via `unsupported_mime_v2`, which is a different code path). Will be created on first real skip.
+- Scrub module: **canonical Layer B.** Any chunk written through `_drive_common.chunk_text()` — both v1 and v2 — gets scrubbed at ingest time. The **9,224 coaching transcript chunks and the original 584 reference library chunks are unprotected** because they were embedded before scrub existed. This is a known gap; see open items.
+
+### Files touched
+
+**Modified, committed in `ac3f1fc`:**
+- `ingester/text/scrub.py` (dedup pattern added)
+- `ingester/loaders/_drive_common.py` (scrub import + wiring + metadata propagation + docstring)
+- `ingester/loaders/drive_loader_v2.py` (new constants, `log_skipped_file()` helper, guard redesign, dump-json skip-path fix, moved stitched_words computation, cleaned summary output)
+
+**Added, committed in `ac3f1fc`:**
+- `scripts/test_scrub_s13.py` — 19-case scrub unit battery
+- `scripts/test_scrub_wiring_s13.py` — scrub+chunk_text smoke test
+- `scripts/inspect_v2_dump_s13.py` — dump-json inspection helper (reusable)
+
+**Latent bug in `ac3f1fc`, fixed in session 13 followup commit:**
+- `ingester/text/__init__.py` was never committed. Session 12 created it as an empty package marker; session 13 imported from it successfully because the working tree had it, but `ac3f1fc` staged `scrub.py` without its sibling `__init__.py`. Any fresh clone would `ImportError` on first v1 or v2 invocation. Followup commit closes this.
+
+**Gitignored by the existing `data/` rule (not tracked):**
+- `data/dumps/supplement_info_pilot_v2_s13.json` — dry-run dump, regenerable
+- `data/ingest_runs/8eb7bb77aedd4a4c.json` — reversibility run record. **Recommend whitelisting `data/ingest_runs/` in session 14** so run records are in git going forward.
+
+**Not touched:** v1 loader (only flows through `_drive_common`), any existing Chroma collection except the additive v2 write, Railway, `.env`, any session-7-era plan or ADR.
+
+### Guardrails honored
+
+- Railway production: untouched ✓
+- `rf_coaching_transcripts`: zero reads-with-side-effects ✓
+- ChromaDB writes: only the approved v2 commit-run, preceded by dry-run and explicit `commit` approval ✓
+- Git operations by Claude: zero ✓
+- Dr. Christina / Dr. Chris / Dr. Massinople / Massinople Park / Mass Park: **zero references in any committed chunk text** ✓ (case-insensitive check across all 11 new chunks)
+- Credentials in chat: zero ✓
+
+### Open items for session 14 (in priority order)
+
+1. **Commit `ingester/text/__init__.py` plus the session 13 followup artifacts** (this HANDOVER entry, new `NEXT_SESSION_PROMPT.md`, `scripts/build_image_review.py` session 12 straggler). Latent import bug from `ac3f1fc` needs closing before any new code lands.
+
+2. **Drive the folder-selection UI end-to-end with real `data/selection_state.json`.** This is Gap 1 from STATE_OF_PLAY and has been the stated goal since session 9. Sessions 10–13 have all bypassed it via `/tmp/rf_pilot_selection.json`. The v2 loader now works, proven against real data. Session 14's job: select a real folder via the admin UI, persist real state, run v2 ingest off that state (not `/tmp/`), confirm end-to-end. This is the "natural next major piece of work" STATE_OF_PLAY's session 10 amendment pointed at, with v2 now in place.
+
+3. **OpenAI pre-flight check on commit path.** ~10 lines. Would have turned today's 15-second auth failure into a 1-second one. Low effort, high value.
+
+4. **Route `unsupported_mime_v2` (spreadsheets, PDFs, etc.) through `log_skipped_file()`.** That skip path is currently un-instrumented — it doesn't flow through `all_files_dumped` or `skipped_files_log.jsonl`. ~8 lines.
+
+5. **Whitelist `data/ingest_runs/` in `.gitignore`.** Run records are the reversibility audit trail for every commit-run; they belong in git. Add `!data/ingest_runs/` + `!data/ingest_runs/*.json` after the existing `data/` ignore line. Back-fill `8eb7bb77aedd4a4c.json` in the same commit.
+
+6. **Scrub retrofit against existing collections is NOT on session 14's path.** The 9,224 coaching transcript chunks and the original 584 A4M reference chunks are unprotected by scrub. If Dr. Christina / Dr. Chris appears in that content (likely for coaching transcripts — Christina was a co-coach before the split), the Nashat agent could leak the name via retrieval. This is a real correctness/liability concern and belongs as a named BACKLOG.md item, but it is not the work of session 14. Flagging here so it doesn't drift. Add it to BACKLOG.md as part of the session 13 followup commit.
+
+### Session 13 cost summary
+
+- Scrub fix, wiring, guard writeup, guard code: $0
+- v2 dry-run: $0 vision (54/54 cache hits), $0 embedding (dry-run)
+- v2 commit-run: $0 vision, ~$0.0012 embedding (real spend)
+- **Total session 13: ~$0.0012 real spend.** Projected was <$0.001; the ~$0.0002 overage is noise-level. Well under any cost gate.
+
+---
+
 ## Session 11 — 2026-04-13 — Drive loader v2 (built + dry-run, halted on guard tuning)
 
 **Scope shipped:** v2 Drive loader (HTML export + Gemini 2.5 Flash vision OCR) built end-to-end, refactored v1 with regression-verified equivalence, executed two dry-runs against Supplement Info, confirmed OCR quality is excellent on real product images. **Halted before guard redesign and commit-run per staircase.** No ChromaDB writes. No Railway changes. No git operations by Claude. Total real spend: $0.0045 vision.
