@@ -2,7 +2,7 @@
 
 **Date proposed:** 2026-04-11
 **Date decided:** 2026-04-11
-**Status:** DECIDED
+**Status:** DECIDED (amended 2026-04-12 — see Addendum at bottom)
 **Deciders:** Daniel Smith (founder, RF / RH)
 **Context:** Phase A design pass during the RF internal education RAG build,
 following the GCP foundation work.
@@ -193,6 +193,11 @@ becomes the front door to the RAG.
 ---
 
 ## The registry schema
+
+> **⚠ Amended 2026-04-12.** The schema below is the original 2026-04-11 Drive-only
+> version. See the **Addendum (2026-04-12)** at the bottom of this ADR for the
+> `origin` field, the generalized primary key, and the rules for non-Drive
+> (static-library) file records introduced by ADR_005.
 
 The `rf_library_index` ChromaDB collection stores two kinds of records,
 distinguished by the `record_type` metadata field:
@@ -427,3 +432,137 @@ refactored only if and when there is a specific reason to.
 *ADR locked 2026-04-11 at the close of the Phase A design pass. The
 registry, diff engine, and library-aware agent layer are now first-class
 parts of the build, not afterthoughts.*
+
+---
+
+## Addendum (2026-04-12) — `origin` field and non-Drive file records
+
+**Status:** DECIDED 2026-04-12
+**Trigger:** ADR_005 (static libraries) introduced a non-Drive ingestion path
+for `rf_reference_library` and future curated collections. The original
+`rf_library_index` file record schema above assumes Drive-native files and
+does not accommodate static-library sources. This addendum closes that gap.
+
+### What changed
+
+**1. New required field on file records: `origin`.**
+
+```
+origin:                string                    # drive_walk | static_library
+```
+
+- `drive_walk` — file was discovered and ingested via the ADR_002 folder walk +
+  diff pipeline. Continues to be the default for all ADR_002-native content.
+- `static_library` — file was loaded via an ADR_005 static-library CLI loader.
+  Bypasses walk/diff/manifest entirely.
+
+The field is mandatory on all new file records. The ADR_002 backfill pass
+for the existing 9,224 `rf_coaching_transcripts` chunks writes `origin:
+"drive_walk"` (the historical transcripts all originated from Drive).
+
+**2. Generalized primary key: `source_id`.**
+
+The original schema used `drive_file_id` as both a data field and the primary
+key component (`file:{drive_file_id}`). This does not work for static-library
+files, which have no Drive file ID. The primary key is now:
+
+```
+file record ID format: file:{source_id}
+```
+
+Where `source_id` is derived from `origin`:
+
+- When `origin == "drive_walk"`: `source_id = drive_file_id` (Drive's opaque file ID).
+  Record ID format: `file:{drive_file_id}` — **unchanged** from the 2026-04-11 schema.
+  Existing backfill code and all drive_walk paths are unaffected.
+- When `origin == "static_library"`: `source_id = static:{library_name}:{relative_path}`.
+  Example: `static:a4m_course:Transcriptions/Module_01_Epigenetics.txt`.
+  Record ID format: `file:static:{library_name}:{relative_path}`.
+
+The `drive_file_id` field is retained on all records but is **null for
+static-library files**. Code that previously filtered on `drive_file_id`
+presence can continue to do so to select only Drive-native records.
+
+**3. Field nullability changes for static-library records.**
+
+Drive-specific fields become nullable when `origin == "static_library"`:
+
+| Field | drive_walk | static_library |
+|---|---|---|
+| `drive_file_id` | required | **null** |
+| `drive_path` | required | **null** (use `local_path` instead) |
+| `source_drive` | required | **null** |
+| `source_folder_id` | required | **null** |
+| `modified_time` | from Drive API | from local file `mtime` (ISO timestamp) |
+| `content_hash` | md5 from Drive API | sha256 computed from file bytes at load time |
+| `selected` | UI-driven bool | **always `true`** (CLI-loaded, not UI-selectable) |
+
+**4. New optional field: `local_path`.**
+
+```
+local_path:            string | null             # absolute path on local Mac; static_library only
+```
+
+Populated only for `origin == "static_library"` records. Stores the absolute
+path on Dan's local Mac that the loader read from. Purely informational —
+allows an admin to trace a chunk back to its source file on disk. Does not
+get synced to Railway (the path is local-only). Null on all `drive_walk`
+records.
+
+**5. Diff engine behavior is unchanged.**
+
+The ADR_002 diff engine operates **only on `drive_walk` records.** It
+explicitly filters `WHERE origin = "drive_walk"` when computing work lists.
+Static-library records are invisible to the diff engine — they don't appear
+in `new_files`, `modified_files`, `deleted_files`, or `unselected_files`.
+Static libraries' idempotency and re-ingestion semantics are the loader
+script's responsibility, per ADR_005 §6.
+
+**6. Folder-selection UI behavior is unchanged.**
+
+The folder-selection UI (ADR_004) continues to show only `drive_walk` content.
+Static-library content is **deliberately not surfaced in the UI**, per
+ADR_005 §3 ("NOT surfaced in the folder-selection UI... This is permanent,
+not 'for now'"). The UI's registry queries filter on
+`origin = "drive_walk"`. A future library inventory view (separate surface,
+not this UI) may show both origins side-by-side.
+
+**7. Soft-delete (ADR_002 Q4) does not apply to static libraries.**
+
+Static-library records are never marked `pending_review` by the diff engine
+because the diff engine doesn't see them. If a static library needs to be
+removed, it's a deliberate CLI operation: the loader script (or a companion
+`unload` script) deletes the library's file records and their associated
+chunks. No human review queue, no soft delete state. This is consistent
+with ADR_005 §6's "loader script's responsibility" framing.
+
+### What this addendum does NOT change
+
+- The library records schema is unchanged. `origin` is a property of files,
+  not libraries. A single library (e.g., `a4m_course`) can in principle
+  contain both `drive_walk` and `static_library` file records — today A4M
+  is static-only, but the schema does not prohibit future hybrid libraries.
+- The 15-library starter list is unchanged. `a4m_course` is still Reference
+  tier; its files will carry `origin: "static_library"` when loaded.
+- The backfill rule for the existing 9,224 `rf_coaching_transcripts` chunks
+  is unchanged. Those files get `origin: "drive_walk"` (they originated from
+  Drive, even though ingestion pre-dated the registry).
+- The diff engine, folder-selection UI, and library-aware agent logic are
+  unchanged in their Drive-native paths.
+
+### Cross-references
+
+- **ADR_005 (static libraries)** — defines the ingestion category this addendum
+  accommodates. ADR_005 §5 specifies the forward-compat requirement; this
+  addendum satisfies it.
+- **ADR_006 (chunk reference contract)** — defines the per-chunk metadata
+  that static-library loaders must produce. Complementary to this addendum,
+  which governs per-file registry records rather than per-chunk content
+  metadata.
+
+---
+
+*Addendum locked 2026-04-12 alongside ADR_005 and ADR_006. The `origin`
+field and `source_id` generalization unblock the first static-library
+loader (A4M transcripts) from writing to `rf_library_index` without
+corrupting the Drive-native diff pipeline.*

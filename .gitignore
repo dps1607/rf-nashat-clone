@@ -52,3 +52,6 @@ flask_session/
 
 # Local data directory (inventories, manifests, assets)
 data/
+
+# Admin UI audit log (append-only, local only)
+audit.jsonl
