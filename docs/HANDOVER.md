@@ -6,6 +6,169 @@ Updated in place each session-end. Read this first to resume.
 
 ---
 
+## Session 11 — 2026-04-13 — Drive loader v2 (built + dry-run, halted on guard tuning)
+
+**Scope shipped:** v2 Drive loader (HTML export + Gemini 2.5 Flash vision OCR) built end-to-end, refactored v1 with regression-verified equivalence, executed two dry-runs against Supplement Info, confirmed OCR quality is excellent on real product images. **Halted before guard redesign and commit-run per staircase.** No ChromaDB writes. No Railway changes. No git operations by Claude. Total real spend: $0.0045 vision.
+
+**Step 0 reality check:** PASSED all five gates. Gemini Vertex AI smoke test passed on first run — Dan's IAM grant of `roles/aiplatform.user` landed cleanly between sessions 10 and 11. One surprise surfaced and resolved: `vertexai.generative_models` import path is deprecated June 24 2026; Dan approved switching to the `google-genai` SDK in Vertex AI mode for forward compatibility. Verified working with the same service account.
+
+### What landed
+
+1. **Design doc** (`docs/plans/2026-04-13-drive-loader-v2.md`, 309 lines). Full spec of 14 decisions, pilot success criteria, flow diagram, staircase. Read this before touching v2.
+
+2. **Shared helpers extracted** (`ingester/loaders/_drive_common.py`, 348 lines). Extracted from v1's body: constants, manifest lookup, `normalize_text`, `chunk_text`, `build_chunk_id`, `build_metadata_base`, `assert_local_chroma_path`, `load_and_validate_selection`. Single source of truth for v1 and v2.
+
+3. **v1 patched** (`ingester/loaders/drive_loader.py`, 827 → 522 lines). Imports from `_drive_common`; `build_metadata` is a thin wrapper over `build_metadata_base` with `source_pipeline="drive_loader_v1"`. **Regression dry-run against Supplement Info matches session 10 byte-for-byte:** 1 ingested, 2 low_text_yield (Comprehensive 0.07%, Supplement Details 0.45%), 1 unsupported_mime, 1 chunk, $0.0001. Refactor is safe.
+
+4. **Vision stack** (new):
+   - `ingester/vision/__init__.py`
+   - `ingester/vision/ocr_cache.py` (97 lines) — SHA-256 keyed disk cache. Keys on image bytes (not URLs, which expire in HTML exports). Atomic writes via tmp-rename. Prompt-version invalidation. Hit/miss stats.
+   - `ingester/vision/gemini_client.py` (179 lines) — `google-genai` Vertex AI client (lazy-init so v1 doesn't pay the import cost). `VisionLedger` tracks `images_seen / ocr_called / cache_hit / decorative / failed`, input/output tokens, and `vision_cost_usd` computed live from `VISION_INPUT_PRICE_PER_1M = 0.075` and `VISION_OUTPUT_PRICE_PER_1M = 0.30`. **Canva-aware OCR prompt** (`PROMPT_VERSION = "v1"`) with 4 categories: product labels, infographics/charts/designed visuals, medical/clinical figures, `DECORATIVE`. Per-image error resilience: failures logged to ledger and returned as result objects with `failed=True`, never raised — a single bad image cannot abort a file.
+
+5. **v2 loader** (`ingester/loaders/drive_loader_v2.py`, ~830 lines):
+   - `export_html()` — Drive API export with `mimeType="text/html"`
+   - `walk_html_in_order()` — BeautifulSoup (stdlib `html.parser`) tree walk preserving prose + `<img>` positions in document order. Handles block-level containers (`p`, `h1-h6`, `li`, `div`, `td`, `blockquote`, etc.) by flushing text buffers around embedded images so ordering is preserved inside blocks.
+   - `resolve_image_bytes()` — decodes base64 data URIs (the common case, see finding below) with HTTP fallback for absolute URLs
+   - `stitch_stream()` — produces `[IMAGE #N: ...]` markers inline at document positions, drops `DECORATIVE` responses, writes `OCR_FAILED — <80-char-reason>` or `DOWNLOAD_FAILED — <80-char-reason>` markers for error cases (80-char cap prevents base64 leakage — see fix below)
+   - `count_image_words_in_chunk()` — populates the v2 metadata field `image_derived_word_count` per chunk
+   - **Hard gates**: refuses `/data/*` Chroma, refuses placeholder selection, refuses missing assignments, refuses libraries outside `ALLOWED_LIBRARIES`, requires `OPENAI_API_KEY` on commit, requires `GOOGLE_APPLICATION_CREDENTIALS`/`GOOGLE_SERVICE_ACCOUNT_JSON` (same service account does Drive AND Vertex AI), interactive `y/N` gate at $1.00 vision spend, hard refuse at $25.00 without `--allow-strategic-spend`, per-file vision failure rate ceiling at 20% (min 5 images) → skip as `vision_failure_rate_too_high`
+   - **v2 low-yield guard**: same 5% threshold / 10 KB floor as v1, but numerator is `len(stitched_text)`. **This guard is wrong for v2 — see Critical findings below.**
+   - **CLI**: `--selection-file`, `--folder-id`, `--dry-run`/`--commit`, `--dump-json PATH`, `--no-cache`, `--allow-strategic-spend`, `--verbose`
+
+### Dry-runs executed
+
+**Run 1** (first attempt, pre-patch): Surfaced **two bugs**, both caught by the staircase before any commit. Zero actual spend.
+
+- **Bug A**: my design-doc assumption that Drive HTML export serves images via authenticated `googleusercontent.com` URLs was wrong. The real behavior is **images are inlined as `data:image/png;base64,...` URIs directly in the HTML**. My `download_image_bytes()` tried to HTTP-fetch those and every call raised "Only absolute URIs are allowed". This is actually better news than the assumption — no auth round-trip, no network latency, more reliable — we just need to decode instead of fetch.
+- **Bug B**: the error messages from Bug A were inserted verbatim into the stitched text stream, leaking multi-megabyte base64 payloads into `stitched_text`. The 4.3 MB Comprehensive doc "stitched" to 6 million chars / 542 words — those chars were base64 garbage inside `DOWNLOAD_FAILED` markers. Embedding-cost gate would have caught this at $0.39 but commit-run was still halted by the staircase design.
+
+**Patches applied** (same session):
+- Replaced `download_image_bytes` with `resolve_image_bytes`: detects `data:` scheme and decodes base64 locally via stdlib, falls back to authorized HTTP fetch for `http(s)://` URLs
+- Capped `DOWNLOAD_FAILED` reason strings at 80 characters (defense-in-depth against any future edge case leaking payload into chunks)
+
+**Run 2** (post-patch): Vision pipeline works end-to-end. Cleaner numbers:
+
+- **Professional Nutritionals FKP Schedule**: 0 images, 2,006 chars / 360 words, 1 chunk — same as v1, makes it through.
+- **Comprehensive List of Supplements and substitutions**: 4.33 MB on Drive, 6.26 MB HTML export, 104 text blocks + 27 images in stream, **stitched to 16,801 chars / 2,583 words**. Skipped by guard at 0.39% yield (threshold 5%).
+- **Supplement Details**: 522 KB on Drive, 6.20 MB HTML export, 91 text blocks + 27 images, **stitched to 16,511 chars / 2,543 words**. Skipped by guard at 3.16% yield.
+- Supplement List with Brands: spreadsheet, `unsupported_mime_v2`, skipped (expected).
+- **Vision ledger**: 54 images seen, 27 OCR'd, **27 cache hits** (the second doc's images are duplicates of the first doc's — SHA-256 cache earning its keep immediately), 0 decorative, 0 failed. 39,732 input tokens, 5,078 output tokens, **$0.0045 vision spend**.
+
+### Critical findings
+
+1. **The OCR output is excellent.** Verified by reading the on-disk cache files directly (`data/image_ocr_cache/*.json`). Representative samples:
+   - **Pure Encapsulations** Liver-G.I. Detox, 120 capsules, full dietary supplement facts panel
+   - **Designs for Health** L-Glutamine 120 vegetarian capsules, Magnesium Chelate (Bisglycinate) 120 tablets, Stellar C (Vitamin C + Bioflavonoids) 90 vegetarian capsules
+   - **Douglas Laboratories** Quell Fish Oil EPA/DHA Plus D, 60 softgels
+   - Full supplement facts panels with mg doses, % daily values, ingredient lists (Alpha lipoic acid 100mg, NAC 100mg, Turmeric 100mg std to 95% curcuminoids, Milk thistle 125mg std to 80% silymarin...)
+   - Melatonin 3mg product with lot number MEL060-6 and full "Other Ingredients" transcription
+   
+   This is exactly the content the v1 guard was correctly refusing to guess at and exactly why v2 exists. Gemini 2.5 Flash is reading Canva-designed product photos accurately enough to be ingestion-grade.
+
+2. **The v2 low-yield guard is incorrect as designed, and blocks both image-heavy docs.** The 5% threshold was a v1 heuristic based on "exported plain text chars ÷ drive size bytes," where drive size correlates with text content volume. In v2, drive size is dominated by embedded image bytes — a 4.3 MB doc that's 95% product photos has ~15 KB of prose plus 4.3 MB of images, and OCR adds ~16 KB of descriptive text back. The **ratio against drive size is now measuring the wrong thing** — it treats a successful vision extraction as a failure because the OCR output volume is tiny relative to the image payload volume.
+   
+   The guard's original purpose was "detect when plain-text export dropped the content." For v2 the analogous question is "detect when HTML export AND vision OCR together produced nothing usable." A better metric: **absolute stitched word count floor plus a non-decorative image produced condition**. Proposed: skip only if `stitched_words < 200 AND (images_seen == 0 OR all_images_decorative_or_failed)`. This lets through any doc where Gemini actually got something out of the images, regardless of drive size ratio. Rejected alternative: "lower the ratio to 0.3%" — that just chases the specific numbers in this pilot and would miss the conceptual fix.
+
+3. **The dump-json artifact is broken for the most important files.** When `low_yield_even_with_vision` fires, the file's stitched text and per-image OCR records are **dropped from the dump entirely** — only a tiny skip record with filename and ratio lands in `low_yield_skipped[]`. This is a dump-inspection bug: the dump is supposed to be the halt-for-Dan inspection artifact, and it currently omits the exact files we most need to inspect. The bug lives in the dry-run branch of `run()` where `all_files_dumped` only gets appended inside the ingest path, not inside the skip-after-stitch path. Needs a one-sided fix.
+   
+   **Workaround this session**: I eyeballed OCR quality by reading the cache files directly (27 JSONs at `data/image_ocr_cache/`, each containing `ocr_text` + token counts keyed by SHA-256). The cache has the content; the dump currently doesn't. Session 12 fix should append to `all_files_dumped` before the skip `continue`, not after the chunk-write loop.
+
+### What's in the cache (session 12 starts free here)
+
+27 OCR results in `data/image_ocr_cache/` are keyed by image SHA-256. Any re-run of v2 against Supplement Info is **zero vision spend** — the cache rehydrates everything. A session 12 dry-run to validate the guard fix should complete in ~15 seconds at $0.00. The cache survives restarts. **This is a significant carry-forward**: the expensive validation work is done.
+
+### Files touched this session
+
+**New:**
+- `docs/plans/2026-04-13-drive-loader-v2.md` (309 lines)
+- `ingester/loaders/_drive_common.py` (348 lines)
+- `ingester/loaders/drive_loader_v2.py` (~830 lines)
+- `ingester/vision/__init__.py`
+- `ingester/vision/ocr_cache.py` (97 lines)
+- `ingester/vision/gemini_client.py` (179 lines)
+- `data/dumps/supplement_info_pilot_v2.json` (inspection artifact, currently incomplete per finding 3)
+- `data/image_ocr_cache/` (27 JSONs, ~20 KB total, runtime dir — should be gitignored)
+
+**Modified:**
+- `ingester/loaders/drive_loader.py` (behavior-preserving refactor; 827 → 522 lines)
+
+**New pip dependencies installed in venv:**
+- `google-cloud-aiplatform-1.147.0` (pulls in `google-genai-1.72.0` as dep — the SDK actually used)
+- `beautifulsoup4-4.14.3`, `soupsieve-2.8.3`
+
+**Not touched**: `ingester/config.py`, `ingester/drive_client.py`, `admin_ui/`, `rag_server/`, any ChromaDB collection, Railway, git, `.env`, any doc under `docs/` except the new v2 design doc.
+
+### Hard rules honored (verbatim from sessions 7–10)
+
+- No ChromaDB writes ✓ (dry-run only; cache writes go only to `data/image_ocr_cache/`)
+- No Railway operations ✓ (v2 refuses `/data/` paths in code)
+- No git operations by Claude ✓
+- No deletions ✓
+- No reference to Dr. Christina ✓ (n/a — Drive content)
+- Credentials ephemeral ✓ (`.env` not re-read; service account JSON referenced by path only)
+- Desktop Commander used throughout ✓ (no `create_file`; all writes via heredoc to disk)
+
+### Cost this session
+
+- Vision: $0.0045 (54 image calls, 27 unique + 27 cache hits)
+- Embedding: $0 (no commit)
+- **Total: $0.0045**
+
+Well under the $1.00 interactive gate and $25 hard gate. Zero strategic spend used.
+
+### What session 12 should do (in order)
+
+**Step 0**: same reality check as sessions 9/10/11. Tool load, repo state, drive auth, Gemini smoke test (should still be green, no IAM changes expected). Crucially, **verify the OCR cache is still present** at `data/image_ocr_cache/` — 27 files. If present, session 12's dry-runs cost $0. If the user blew it away between sessions, a fresh dry-run costs ~$0.0045.
+
+**Step 1 — eyeball gate (the halt Dan asked for at session 11 end).** Read cache files directly and show Dan representative OCR samples so he can sign off on OCR quality before any guard change. Session 11 saw Pure Encapsulations, Designs for Health, Douglas Labs product transcriptions — but Dan has not personally confirmed these are accurate transcriptions of his actual product images. **Do not change the guard until Dan has personally OK'd the OCR output.**
+
+**Step 2 — guard redesign**, assuming Dan greenlights OCR quality. Replace the ratio-based `LOW_YIELD_RATIO_THRESHOLD` with an absolute-floor + signal-present test. Proposed logic (Claude's tactical call, flag to Dan before coding):
+```
+skip with reason "low_yield_even_with_vision" IF:
+    stitched_words < MIN_STITCHED_WORDS_FLOOR   # proposed: 200
+    AND (
+        images_seen == 0
+        OR all(image is decorative or failed for image in images)
+    )
+```
+This lets through any doc where Gemini actually got text out of at least one non-decorative image, regardless of the ratio against drive size. The v1 ratio guard is preserved in `_drive_common.py` and still used by v1 unchanged — only v2 gets the new logic.
+
+**Step 3 — dump-json fix**. Append `all_files_dumped` entry before the `continue` on each skip path inside `run()`, so the dump captures the full stitched text + per-image records for skipped files too. This is the inspection artifact's whole job and it's currently failing at exactly the wrong moment.
+
+**Step 4 — re-run dry-run against Supplement Info with fixes**. Expected: 3 files ingest (Professional Nutritionals + Comprehensive + Supplement Details), 1 skipped (spreadsheet), ~0–5 chunks total across the two image-heavy docs (given ~2,500 words each and a 700-word chunk ceiling). Cost: $0 vision (cache), ~$0.0001 embedding estimate. **HALT for Dan to eyeball the full dump-json.**
+
+**Step 5 — only with explicit Dan approval**, commit-run against Supplement Info into local Chroma. Expected: ~5 chunks into `rf_reference_library`, collection grows 584 → ~589. Reversible via chunk IDs in the run record (`data/ingest_runs/<id>.json`).
+
+### Stop conditions any of which makes session 12 a success
+
+- Guard fix lands, v2 dry-run shows Comprehensive + Supplement Details both ingesting with coherent chunks containing recognizable supplement brand names
+- v2 commit-run into local Chroma, chunks queryable
+- Dan pushes back on OCR quality and we iterate the prompt (the `PROMPT_VERSION = "v1"` bump invalidates the cache automatically; a prompt change is cheap to test — ~$0.005 for a fresh cache fill)
+
+### Anti-goals for session 12 (same as session 11)
+
+- Do NOT push v2 to Railway
+- Do NOT delete or modify v1 except via `_drive_common` (refactor already done)
+- Do NOT ingest any folder besides Supplement Info
+- Do NOT bolt PDF/Slides/image-file support onto v2
+- Do NOT touch ADR_006, the three session-7 plans, or anything under "frozen"
+
+### Deferred / still-on-the-backlog
+
+- `.gitignore` entry for `data/image_ocr_cache/` — not added this session, should be added before any git commit lands v2
+- Visual sanity-test of the session-10 library-picker UI in a real browser — still not done
+- Embedding-cost gate for v2 should use the same $1.00 threshold as the v1 gate; currently v2 prints a `COST WARNING` but doesn't gate (minor)
+- v2's `unsupported_mime_v2` skip reason should probably be renamed to just `unsupported_mime` for consistency with v1 (cosmetic)
+
+### Cost prediction for session 12
+
+- Step 1 eyeball: $0 (reading cache)
+- Step 4 dry-run post-fix: $0 (cache hit) + ~$0.0001 embedding estimate in dry-run print
+- Step 5 commit-run: ~$0.0001 embedding actual, $0 vision
+- **Total session 12 projected: < $0.001**
+
+---
+
 ## Session 10 — 2026-04-13 — Drive loader pilot (dry-run only)
 
 **Scope shipped:** Re-Scope B from session-10 staircase. Library-picker UI patch + Drive content loader (dry-run only). NO actual ingest. NO embedding spend. NO Chroma writes. NO Railway changes.

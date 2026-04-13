@@ -1,191 +1,168 @@
-# NEXT SESSION PROMPT — session 11
+# NEXT SESSION PROMPT — session 12
 
 > **⚠ READ THIS FIRST, BEFORE ANY READING LIST**
 >
-> Sessions 9 and 10 both used a "step 0 reality check" before doing any work. Session 9 corrected drift inherited from sessions 5–8. Session 10 used the reality check to catch a path mismatch in the bootstrap prompt before it caused harm. **Keep doing this.** The reality check has paid for itself twice. Do not skip it.
+> Sessions 9, 10, and 11 all used a "step 0 reality check" before doing any work. Session 11's step 0 caught that the `google-genai` SDK import path was deprecated and let us pick the right path before writing any code. **Keep doing this.** The reality check has paid for itself three sessions in a row.
 
 ---
 
 ## Step 0 — Tool and reality check (mandatory, ~5 minutes)
 
-Before reading anything else, run all four checks. **Stop and tell Dan if anything surprises you.**
+Before reading anything else, run all five checks. Stop and tell Dan if anything surprises you.
 
-1. **Tool enumeration.** You need filesystem tools (`Filesystem:read_text_file`, `Filesystem:write_file`) AND process execution (`Desktop Commander:start_process` and friends). If you only have filesystem and no process pathway, stop and tell Dan the chat needs Desktop Commander loaded.
+1. **Tool enumeration.** Need `Desktop Commander:start_process` + `interact_with_process` + `read_file` + `read_multiple_files`. If only filesystem and no process pathway, stop and tell Dan the chat needs Desktop Commander.
 
-2. **Smoke test process execution.** Run `echo "session 11 tool check $(date -u +%Y-%m-%dT%H:%M:%SZ)"`. Confirm it works.
+2. **Smoke test process execution.** Run `echo "session 12 tool check $(date -u +%Y-%m-%dT%H:%M:%SZ)"`.
 
-3. **Repo state.** `cd /Users/danielsmith/Claude\ -\ RF\ 2.0/rf-nashat-clone && git status && git log --oneline -5`. Expected baseline: clean tree on `main`, top commit is the session-10 squash that Dan landed (or close to it). If the tree isn't clean or the top commits don't match what HANDOVER's session-10 entry describes, stop and surface it.
+3. **Repo state.** `cd /Users/danielsmith/Claude\ -\ RF\ 2.0/rf-nashat-clone && git status && git log --oneline -5`. Expected: session-11 work is uncommitted (Dan runs git); top commit is still `567e6cc session 10`. If Dan has committed session 11 work between sessions, top commit will be that commit — either is fine, just know which.
 
-4. **Reality-vs-prompt check.** Independently verify these claims against the actual filesystem before reading the reading list:
-   - **Drive auth still works locally.** Run: `export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json && ./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"`. Should print OK and the service account email.
-   - **The session 10 v1 loader exists and dry-runs cleanly.** `./venv/bin/python -m ingester.loaders.drive_loader --selection-file /tmp/rf_pilot_selection.json --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 --dry-run 2>&1 | tail -20`. (You may need to recreate `/tmp/rf_pilot_selection.json` first — it gets wiped on Mac reboot. Contents are in HANDOVER's session 10 entry.) Should report 1 file would ingest, 2 skipped as `low_text_yield`, 1 skipped as `unsupported_mime`. If those numbers don't match, the loader has changed since session 10 and you need to understand why before proceeding.
+4. **Reality-vs-prompt check.** Verify these against the actual filesystem before reading the reading list:
+   - **Drive auth still works locally.** `export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json && ./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"`. Should print OK and `rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`.
+   - **Gemini Vertex AI still works.**
+     ```python
+     from google import genai
+     c = genai.Client(vertexai=True, project="rf-rag-ingester-493016", location="us-central1")
+     r = c.models.generate_content(model="gemini-2.5-flash", contents="Say 'ok' and nothing else.")
+     print(r.text)
+     ```
+     Expected: `ok`. If permission error → IAM role dropped (shouldn't happen, but check).
+   - **OCR cache is present.** `ls data/image_ocr_cache/*.json | wc -l` — should be **27**. If 0, the cache was wiped between sessions; session 12's first dry-run will cost ~$0.0045 to refill it (still cheap). If 27, session 12 dry-runs cost $0.
+   - **v2 loader and shared helpers are on disk.** `ls ingester/loaders/drive_loader_v2.py ingester/loaders/_drive_common.py ingester/vision/*.py`.
+   - **v1 regression still passes.** `./venv/bin/python -m ingester.loaders.drive_loader --selection-file /tmp/rf_pilot_selection.json --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 --dry-run 2>&1 | tail -15`. Should report `files ingested: 1`, `low_text_yield: 2 (Comprehensive 0.07%, Supplement Details 0.45%)`, `unsupported_mime: 1 spreadsheet`, total chunks 1, $0.0001. If `/tmp/rf_pilot_selection.json` is gone (Mac reboot wipes /tmp), recreate it per HANDOVER's session 10 entry.
    - **Railway production is still alive.** `curl -sI https://console.drnashatlatib.com | head -3`. HTTP/2 302.
-   - **`data/selection_state.json` state.** It may now contain real data if Dan visually-tested the picker between sessions, or may still be the placeholder. Either is fine — just know which.
 
-If any check returns a surprise, stop and surface it before reading further.
+If any check returns a surprise, stop and surface it.
 
 ---
 
 ## Reading order (after step 0 passes)
 
-Tight reading list. Most context budget should go to building, not reading.
+Tight reading list. Context budget goes to fixing the guard and validating, not reading.
 
-1. **`docs/STATE_OF_PLAY.md`** — authoritative current-state document. Read in full, including both session-10 amendments at the bottom.
-2. **`docs/HANDOVER.md`** — read the session 10 entry AND the session 10 addendum at the very top. The addendum is where the v2 loader sketch lives.
-3. **`docs/plans/2026-04-13-drive-loader-pilot.md`** — the v1 loader design doc. Read for context on the architectural decisions you'll be inheriting (chunk ID format, metadata schema, hard guards, refusal-to-run-against-Railway). v2 should keep these.
-4. **`ingester/loaders/drive_loader.py`** — the v1 loader itself. ~770 lines. Most of v2 will reuse v1's plumbing (CLI, validation gates, manifest lookup, metadata building, dump-json, low-yield guard) and replace only the `fetch_file_text` + chunking entry points.
-5. **`ingester/drive_client.py`** — already understood from session 10, just refresh.
-6. **`ingester/config.py`** — already names `VISION_MODEL = "gemini-2.5-flash"` for image enrichment. v2 will actually use this for the first time.
+1. **`docs/HANDOVER.md`** — read the session 11 entry at the top in full. Session 10 and earlier entries: skip unless a specific question forces it. The session 11 entry documents everything session 12 needs to know about v2's current state, what OCR actually produced, and the two bugs still in v2.
+2. **`docs/plans/2026-04-13-drive-loader-v2.md`** — the v2 design doc. Skim for context; the session 11 handover captured all decisions.
+3. **`ingester/loaders/drive_loader_v2.py`** — read in full. Specifically focus on:
+   - `run()` — the dry-run vs commit path, where `all_files_dumped.append(...)` is called (bug: not called on skip paths)
+   - `stitch_stream()` — understand how `[IMAGE #N: ...]` markers are assembled
+   - The `low_yield_even_with_vision` guard block — the thing you're going to redesign
+4. **`ingester/loaders/_drive_common.py`** — skim. Do not modify unless the guard fix specifically needs a shared helper change (it shouldn't — v1's guard stays, v2 gets a v2-specific guard).
 
 **Do NOT read** (deliberate skips):
 - The session 7 HANDOVER entry — frozen
-- ADR_005, ADR_006, the three plans from session 7 — frozen
-- The v3 LLM coaching pipeline (`/Users/danielsmith/Claude - RF 2.0/rag_pipeline_v3_llm.py`) — wrong fit, do not adapt it for v2
-- The original Lineage A files (`ingest_a4m_transcripts.py`, `merge_small_chunks.py`, the JSON files in `data/`) — abandoned dead code per STATE_OF_PLAY
+- ADR_005, ADR_006, the session 7 plans — frozen
+- `drive_loader.py` (v1) — session 11 refactored it to import from `_drive_common`; no changes needed this session
+- `rag_pipeline_v3_llm.py`, A4M ingestion files, Lineage A dead code — irrelevant
 
 ---
 
-## The actual goal for session 11 — build the v2 Drive loader
+## The actual goal for session 12 — three fixes, dry-run, halt, commit
 
-**v2's job:** ingest image-heavy Google Docs that v1's `text/plain` export cannot handle.
+### The problem from session 11, in one paragraph
 
-The v1 loader inspection in session 10 confirmed the lossy-export problem quantitatively: the pilot folder's most substantive doc (4.3 MB on Drive) exported to ~3 KB of text, with all the substitution data trapped in product images. The v1 low-yield guard correctly skipped it, but **most of Dr. Nashat's reference content is built this way** — visual handouts, supplement protocols with product photos, lab interpretation diagrams. v1 cannot deliver them. v2 is what unblocks Drive ingestion as a real pipeline.
+v2 built and runs end-to-end. Gemini OCR quality is excellent — Pure Encapsulations, Designs for Health, Douglas Labs product photos transcribed verbatim with full supplement facts panels, doses, ingredient lists. But **the v2 low-yield guard is wrong**: it inherits v1's ratio-against-drive-size heuristic, which made sense when "drive size" correlated with "text content volume," but in v2 drive size is dominated by image payloads. Both image-heavy supplement docs get skipped at 0.39% and 3.16% yield respectively, even though OCR produced ~2,500 usable words each. **Second bug**: v2's dry-run dump-json drops the stitched text and per-image OCR records for any file the guard skips — exactly the files Dan most needs to eyeball. The dump is the halt-for-review artifact and currently fails at the wrong moment. **Third issue**: before fixing either bug, Dan needs to personally sign off on OCR quality. Session 11 Claude read the cache files and confirmed the transcriptions look correct, but Dan has not personally confirmed these match his actual product images.
 
-### v2 architecture sketch (from session 10 HANDOVER addendum)
+### Staircase for session 12
 
-The shape Claude proposed at session-10 end. **Treat this as a starting point, not a contract.** Push back on it if anything is wrong.
+Use the same approach as sessions 10 and 11. Stop at each halt.
 
-```
-Drive Google Doc (image-heavy)
-    │
-    ├─► Drive API: files().export(mimeType="text/html")
-    │       returns HTML with embedded <img src="..."> tags
-    │
-    ├─► Parse HTML (BeautifulSoup) to extract:
-    │       - prose text in document order
-    │       - image URLs in document order (Drive serves these via
-    │         authenticated googleusercontent.com URLs)
-    │       - structural elements (headings, lists, tables)
-    │
-    ├─► For each image:
-    │       - Download via service account credentials
-    │       - Send to Gemini 2.5 Flash with a focused prompt:
-    │         "You are extracting visual information from a fertility
-    │         reference document. Describe what is shown. If this is a
-    │         product photo, transcribe the product name, brand, dose,
-    │         and any visible label text. Return as a brief structured
-    │         description."
-    │       - Receive OCR'd / described text
-    │       - Cache by image URL hash so re-runs are cheap
-    │
-    ├─► Stitch: rebuild a single text stream with image descriptions
-    │   inserted in their original document positions, marked as
-    │   [IMAGE: ...] so the chunker (and downstream agent) can tell
-    │   "image-derived text" from "doc-prose text"
-    │
-    └─► Chunk + embed + write (same as v1)
-```
+1. **Step 1 — eyeball gate for OCR quality (HALT for Dan's sign-off).**
+   Read 6–10 representative non-decorative entries from `data/image_ocr_cache/*.json`. Show Dan the `ocr_text` field for each. He confirms "yes these are accurate" or pushes back on specific ones. If he pushes back, the fix is a prompt iteration (bump `PROMPT_VERSION` in `ingester/vision/gemini_client.py` from `"v1"` to `"v2"`, which auto-invalidates the cache, and re-dry-run — cost ~$0.005). **Do not touch the guard until Dan has green-lit OCR quality.** Explain in plain language what "ratio-based guard is wrong" means so Dan is making an informed call.
 
-### What v2 inherits from v1 unchanged
-- CLI shape (`--selection-file`, `--folder-id`, `--dry-run`/`--commit`, `--dump-json`, `--verbose`)
-- All hard guards (Railway path refusal, placeholder rejection, schema validation, OPENAI_API_KEY check)
-- Metadata schema (21 fields, including `display_*` and `source_folder_id`)
-- Chunk ID format: `drive:{drive_slug}:{file_id}:{chunk_index:04d}`
-- Paragraph-aware chunking with the 700/80-word window
-- The `low_text_yield` guard (still needed as a safety net even with v2 — some docs may still fail extraction for reasons we haven't anticipated)
-- The dump-json inspection flag
+2. **Step 2 — guard redesign, plain-language write-up for Dan's sign-off before code.**
+   Propose the replacement logic in text form, flag to Dan, wait for approval. Claude's recommended shape (tactical call under mandate):
+   ```
+   # v2-specific guard, replaces the ratio check inherited from v1
+   MIN_STITCHED_WORDS_FLOOR = 200  # absolute floor, not a ratio
 
-### What v2 adds
-- New `fetch_file_html()` function alongside the existing `fetch_file_text()`
-- HTML→stitched-text pipeline with embedded image OCR
-- A new `source_pipeline = "drive_loader_v2"` constant so v2-ingested chunks are distinguishable from v1-ingested chunks in retrieval
-- Per-image OCR cache (probably `data/image_ocr_cache/{sha256}.json`) so re-runs skip already-OCR'd images
-- New metadata field per chunk: `image_derived_word_count` (how many words in this chunk came from image OCR vs doc prose)
-- Cost tracking that includes both embedding spend AND Gemini vision spend
-- A new low-yield variant: if HTML export ALSO yields very little (no images, no text), still skip with a clear reason
+   skip with reason "low_yield_even_with_vision" IF:
+       stitched_words < MIN_STITCHED_WORDS_FLOOR
+       AND (
+           images_seen == 0
+           OR all images are decorative/failed
+       )
+   ```
+   This lets any doc through where Gemini extracted text from at least one non-decorative image, regardless of drive size ratio. The v1 ratio guard stays in `_drive_common.py` and continues to be used by v1 unchanged — only v2 gets the new logic, locally defined inside `drive_loader_v2.py`. Alternative Dan might push: "just lower the ratio to 0.3%" — argue against unless he insists; that chases numbers instead of fixing the concept.
 
-### What v2 explicitly does NOT do (defer to v3)
-- PDF support
-- Spreadsheet support
-- Slide-deck support (Google Slides)
-- Direct image files (`image/jpeg`, `image/png`)
-- Video/audio
-- Re-running v2 against files already ingested by v1 (idempotency at the chunk-ID level handles this naturally; no special migration logic needed)
+3. **Step 3 — dump-json fix.** Inside `drive_loader_v2.py:run()`, find every `continue` on a skip-after-stitch path (currently 2: the `low_yield_even_with_vision` path and the `vision_failure_rate_too_high` path). Before each `continue`, append an entry to `all_files_dumped` with the stitched text and per-image records so the dump captures them. Keep the low_yield_skipped / vision_failed_skipped lists unchanged (they're summary metadata for the top of the dump). The fix is additive; no existing dump field moves.
 
-### Pilot for v2
+4. **Step 4 — re-run v2 dry-run against Supplement Info, dump-json the result, eyeball.**
+   ```
+   ./venv/bin/python -m ingester.loaders.drive_loader_v2 \
+       --selection-file /tmp/rf_pilot_selection.json \
+       --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 \
+       --dry-run --dump-json data/dumps/supplement_info_pilot_v2_post_fix.json
+   ```
+   Expected: 3 files ingest (Professional Nutritionals, Comprehensive, Supplement Details), 1 skipped (spreadsheet), a few chunks total, $0 vision (cache hits), trivial embedding estimate. Show Dan the dump contents — specifically the `[IMAGE #N: ...]` markers inside the chunks for Comprehensive and Supplement Details. **HALT for Dan's final review before any commit.**
 
-Re-use the same pilot folder: **Supplement Info** (`1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54`). v1's dry-run on this folder skipped the two image-heavy docs (Comprehensive List, Supplement Details). v2's success criterion: those two docs ingest cleanly, the substitution product names appear in the dump-json output, and the chunks pass an eyeball test.
+5. **Step 5 — commit-run only with explicit Dan approval.** Real chunks into local `rf_reference_library` collection (584 → ~589). Reversible via chunk IDs in the run record at `data/ingest_runs/<id>.json`. No Railway writes. No git operations by Claude.
 
-### The staircase for session 11
+### Stop conditions (any of which is a successful session 12)
 
-Use the same approach as session 10:
+- Guard + dump fixes land, dry-run produces coherent chunks from both image-heavy docs, commit-run deferred for Dan's review
+- Commit-run lands ~5 chunks from Supplement Info into local Chroma, queryable via `rag_server`
+- Dan rejects OCR quality after eyeball, session pivots to prompt iteration + re-dry-run (also a success — the eyeball gate did its job)
 
-1. **Step 1**: read code, verify Drive auth + Gemini auth (NEW — Gemini hasn't been wired up before, so credentials may need setup). The `GCP_PROJECT_ID = "rf-rag-ingester-493016"` already in `ingester/config.py` is the right project; the service account at `/Users/danielsmith/.config/gcloud/rf-service-account.json` may or may not have Vertex AI permissions. **Verify this first.** If it doesn't, that's a Dan-side GCP IAM change before any code can run.
-2. **Step 2**: design doc for v2, including: HTML parsing strategy, image OCR prompt, cache shape, cost model, what to do if Gemini fails on a specific image. Halt for Dan review.
-3. **Step 3**: build v2 as `ingester/loaders/drive_loader_v2.py` (NOT replacing v1 — both should coexist, controlled by a `--version v1|v2` flag, OR v2 gets its own module name. Tactical call.)
-4. **Step 4**: dry-run v2 against Supplement Info, dump-json the result, eyeball the OCR'd substitution names in the Comprehensive doc. Halt for Dan review.
-5. **Step 5**: only with explicit Dan approval — commit-run v2 against Supplement Info into LOCAL Chroma. Real chunks, real $$, reversible via the chunk IDs in the run record.
+### Anti-goals for session 12 (unchanged from session 11)
 
-### Stop conditions
-
-Any of these is a successful session 11:
-- v2 dry-run produces correct OCR'd output for the Comprehensive doc, even if commit-run is deferred
-- v2 commit-run lands ~10-30 chunks from Supplement Info into local Chroma, queryable via the rag_server
-- A Gemini-side blocker is identified (auth, IAM, quota) and a clean plan to resolve it is written up
-
-### Anti-goals for session 11
-- Do NOT push v2 to Railway in this session. Local Chroma only.
-- Do NOT delete or modify v1. v1 stays as a fast-path for text-only docs.
-- Do NOT ingest any other folders besides Supplement Info. One folder, one validation, then stop.
-- Do NOT bolt PDF / slide / image-file support onto v2 in this session. Single concern: image-heavy Google Docs.
+- NO push of v2 to Railway
+- NO modification of v1 except via `_drive_common` (refactor already done; v1 is frozen)
+- NO ingestion of any other folder besides Supplement Info
+- NO bolting PDF/Slides/image-file support onto v2
+- NO touching ADR_006, the three session-7 plans, or anything under "frozen"
+- NO edits to `_drive_common.py` unless the guard fix specifically requires a shared helper change (it shouldn't — v2's new guard lives inside `drive_loader_v2.py`)
 
 ---
 
 ## Cost expectations
 
-Rough estimate, please verify against Gemini 2.5 Flash current pricing before any commit-run:
+- Step 1 eyeball: $0 (reading on-disk cache files)
+- Step 4 dry-run: $0 vision (all cache hits, 27 unique SHAs already cached) + ~$0.0001 embedding estimate
+- Step 5 commit-run: ~$0.0001 actual embedding, $0 vision
+- **Total session 12 projected: < $0.001**
 
-- Per image: ~250 input tokens (image) + ~200 prompt tokens + ~150 output tokens. At ~$0.075/1M input + ~$0.30/1M output: ~$0.00010 per image.
-- The Comprehensive doc likely has ~50-150 images based on its 4.3 MB size. Estimated v2 cost for that one doc: $0.005 - $0.015.
-- Embedding cost is unchanged from v1: trivial.
+Cost gate thresholds unchanged: $1.00 interactive, $25 hard refuse. Neither should come anywhere near tripping.
 
-**Likely total for the Supplement Info pilot in commit mode: under $0.05.**
-
-If your dry-run estimate exceeds **$1.00**, stop and surface to Dan before any commit-run. If it exceeds **$25.00**, that's a strategic spend that requires Dan approval per the tech-lead mandate.
+**If the cache was wiped** (check in Step 0): first dry-run refills it for ~$0.0045. Still well under any gate. Not a strategic spend.
 
 ---
 
-## Hard rules carried forward (unchanged from sessions 7, 8, 9, 10)
+## Hard rules carried forward (unchanged from sessions 7–11)
 
-- No ChromaDB writes without explicit Dan approval at the specific write moment, and never to Railway without a pre-flight discussion of backups
-- No git push, commit, or add — Dan runs git, Claude suggests
+- No ChromaDB writes without explicit Dan approval at the specific write moment; never to Railway without a pre-flight discussion + verified backup
+- No git push/commit/add by Claude — Dan runs git; Claude suggests
 - No Railway operations without explicit approval
-- No deletions without approval and a verified backup
-- Never reference Dr. Christina; exclude Kelsey Poe and Erica
+- No deletions without approval and verified backup
+- Never reference Dr. Christina; exclude Kelsey Poe and Erica from retrieval results
 - Public agent never accesses `rf_coaching_transcripts`
-- Credentials are ephemeral — never read `.env` and reproduce its contents in chat output, never write credential values into memory or files. If a credential gets into context, treat it as ephemeral and drop it.
-- **Use Desktop Commander heredocs or `Filesystem:write_file` for any file that must land in the repo.** `create_file` writes to Claude's sandbox, not the Mac. Session 8 hit this trap.
-- The session 10 finding that Drive's `text/plain` export is lossy on image-heavy docs is the entire reason v2 exists. Do not "simplify" v2 by going back to plain-text export. The lossiness IS the problem.
+- Credentials ephemeral — never read `.env` and reproduce contents in chat output
+- **Use Desktop Commander heredocs for file writes to the repo.** `create_file` writes to Claude's sandbox, not the Mac. Sessions 8 and 11 both confirmed this matters.
+- **Before any commit-run, halt and show Dan the dump-json.** The v1 loader plan doc codified this ("first-touch of live Chroma requires a manual eyeball-diff gate"). v2 inherits it.
 
 ---
 
 ## Tech-lead mandate (unchanged)
 
-Claude holds tech-lead role on the RAG build. Tactical decisions (script layout, prompt wording, cache shape, chunking parameters) are Claude's call. Strategic decisions (irreversible operations, money spend > $25, anything crossing the RAG/app/product/legal boundary, anything that fails the "can we fix this later?" reversibility test) get flagged to Dan first.
-
-The session-9 addition still applies: at session start, before reading the reading list, independently verify the bootstrap prompt's description of the world against the evidence on disk. The Step 0 reality check IS this rule.
+Claude holds tech-lead role. Tactical decisions (guard logic, prompt wording, cache structure, chunking parameters) are Claude's call. Strategic decisions (irreversible operations, money spend > $25, anything crossing the RAG/app/product/legal boundary, anything failing the "can we fix this later?" test) get flagged to Dan first. Session start includes Step 0 reality check against on-disk evidence before reading the bootstrap prompt's reading list.
 
 ---
 
 ## Quick reference
 
 - Repo root: `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone`
-- Local Chroma: `/Users/danielsmith/Claude - RF 2.0/chroma_db/` (dev sandbox; Railway is canonical for production)
-- Railway production: `https://console.drnashatlatib.com` (Cloudflare Access; allowlisted: dan@reimagined-health.com, znahealth@gmail.com)
-- venv interpreter: `./venv/bin/python` (Python 3.11.3, chromadb 1.5.6)
-- v1 loader: `ingester/loaders/drive_loader.py`
+- Local Chroma: `/Users/danielsmith/Claude - RF 2.0/chroma_db/` (dev sandbox)
+- Railway production: `https://console.drnashatlatib.com` (untouched this work)
+- venv: `./venv/bin/python` (Python 3.11.3, chromadb 1.5.6, google-genai 1.72.0, beautifulsoup4 4.14.3)
+- v1 loader: `ingester/loaders/drive_loader.py` (refactored session 11 — imports from `_drive_common`)
+- v2 loader: `ingester/loaders/drive_loader_v2.py` (new session 11)
+- Shared helpers: `ingester/loaders/_drive_common.py` (new session 11)
+- Vision stack: `ingester/vision/{ocr_cache,gemini_client}.py` (new session 11)
+- OCR cache: `data/image_ocr_cache/*.json` (27 files as of end of session 11)
+- Session 11 dump (BROKEN — only has 1 of 3 files): `data/dumps/supplement_info_pilot_v2.json`
+- Session 11 v1 regression dump baseline: session 10's dump at `data/dumps/supplement_info_pilot_v1guard.json` (unchanged)
 - Pilot folder: Supplement Info, ID `1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54`, in drive `1-operations`
-- Pilot dump (v1, post-guard): `data/dumps/supplement_info_pilot_v1guard.json`
-- GCP project: `rf-rag-ingester-493016` (per `ingester/config.py`)
-- Gemini model: `gemini-2.5-flash` (per `ingester/config.py`'s `VISION_MODEL`)
-- Service account creds: `/Users/danielsmith/.config/gcloud/rf-service-account.json` (mode 600)
+- GCP project: `rf-rag-ingester-493016`
+- Vertex AI region: `us-central1`
+- Gemini model: `gemini-2.5-flash` (per `ingester/config.py:VISION_MODEL`)
+- Prompt version: `v1` (in `ingester/vision/gemini_client.py:PROMPT_VERSION`). Bump to `"v2"` if prompt needs iteration — automatically invalidates cache.
+- Service account: `/Users/danielsmith/.config/gcloud/rf-service-account.json` (mode 600)
+- Selection file for pilot: `/tmp/rf_pilot_selection.json` (contents in HANDOVER session 10 entry — recreate if /tmp wiped)
