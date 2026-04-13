@@ -1,5 +1,19 @@
 # NEXT_SESSION_PROMPT — session 8: Execute A4M migration + coaching Phase 1 backfill
 
+> ## ⚠ ENVIRONMENT REQUIREMENT — READ FIRST ⚠
+>
+> **This session MUST run in Claude Desktop with the Desktop Commander MCP server enabled and loaded into the active chat.** You need bash/process execution tools (`Desktop Commander:start_process`, `bash_tool`, or equivalent) to run Python against live ChromaDB and to monitor long-running backfill processes. Filesystem tools alone are NOT sufficient to complete this session.
+>
+> **At the very start of the session, BEFORE reading anything, verify your toolset.** You should have all of:
+> - Filesystem tools (`Filesystem:read_text_file`, `Filesystem:write_file`, `Filesystem:read_multiple_files`)
+> - Some form of process/bash execution — either `Desktop Commander:start_process` / `Desktop Commander:read_process_output` / `Desktop Commander:interact_with_process`, OR a `bash_tool`, OR a `tool_search` you can call to load Desktop Commander.
+>
+> **If you only have Filesystem tools and no way to load process execution, STOP immediately and tell Dan: "I don't have process execution tools in this chat. Session 8 cannot execute without them. Please check the MCP server configuration for this chat and enable Desktop Commander, then restart the session."** Do NOT attempt to work around it by writing scripts you cannot run. Do NOT proceed past step 0.
+>
+> This warning exists because session 7 ran in Claude Desktop without Desktop Commander loaded into that specific chat and could not run any code, including git. The solution is not "use the browser" (the browser is worse) — it is "ensure Desktop Commander is enabled for this specific Claude Desktop chat before starting."
+
+---
+
 **Purpose:** Execute Plan 1 (A4M chunks migration to ADR_006) and Plan 2 (`rf_coaching_transcripts` Phase 1 structural backfill) from session 7. Both plans are approved. This session writes the actual scripts, runs them in dry-run first, and — with explicit Dan approval at each gate — runs them for real against the local file artifacts and the local Chroma collection. Plan 3 (Phase 2 marker detection) is NOT executed this session; it is a dedicated later session.
 
 Repo root: `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone`
@@ -42,12 +56,22 @@ Consistency across sessions is enforced by: governing docs in the repo (ADRs, AR
 
 ## AVAILABLE TOOLS
 
-Load via `tool_search` at the start:
-- `Filesystem:read_text_file`, `Filesystem:write_file`, `Filesystem:read_multiple_files` — for all file operations on the Mac
-- `Desktop Commander:start_process`, `Desktop Commander:read_process_output`, `Desktop Commander:interact_with_process` — for running Python scripts against Chroma and monitoring long-running processes
-- `Desktop Commander:list_directory` or similar as needed for directory inspection
+**Required tools for this session (see Environment Requirement above):**
 
-You do NOT need web search, image search, or any other categories of tools for this session.
+1. **Filesystem tools** — for reading repo docs and writing scripts/docs to the Mac:
+   - `Filesystem:read_text_file`
+   - `Filesystem:write_file`
+   - `Filesystem:read_multiple_files`
+
+2. **Process execution tools** — for running Python against live ChromaDB and monitoring long-running backfills. You need at least ONE of these pathways:
+   - **Desktop Commander MCP tools** (preferred): `Desktop Commander:start_process`, `Desktop Commander:read_process_output`, `Desktop Commander:interact_with_process`, `Desktop Commander:list_directory`. If these aren't in your initial toolset but `tool_search` is available, call `tool_search(query="start process bash desktop commander")` to load them.
+   - **`bash_tool`** (if present) — equivalent capability, acceptable substitute.
+
+**What to do if `tool_search` itself is not available and no process-execution tools are loaded:**
+
+STOP. Do not proceed. Tell Dan: "I have Filesystem tools but no process execution pathway and no `tool_search` to load one. This chat's MCP server configuration needs Desktop Commander enabled. Please check Claude Desktop's MCP settings for this chat and restart."
+
+**You do NOT need:** web search, image search, visualizers, or any other categories of tools.
 
 ---
 
@@ -76,9 +100,23 @@ If you find yourself re-reading ADR_006 more than once, stop — the session 7 H
 
 ## TASK ORDER (execute in this sequence, stop at each gate)
 
-### STEP 0 — Tool load and access verification
+### STEP 0 — Environment and tool verification (HARD PRECONDITION)
 
-Load filesystem and Desktop Commander tools via `tool_search`. Verify access to `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone` and `/Users/danielsmith/Claude - RF 2.0/chroma_db/`. Confirm the repo is on branch `main` with a clean working tree before making any changes — if it's not clean, STOP and tell Dan.
+Before reading anything else, before loading any docs, **verify your toolset** per the Environment Requirement at the top of this doc and the AVAILABLE TOOLS section.
+
+Specifically:
+
+1. **Enumerate what you actually have.** List the tool names available in your current toolset. Do you have Filesystem? Do you have any form of process execution (Desktop Commander, bash_tool, or similar)? Do you have `tool_search`?
+
+2. **If process execution is missing AND `tool_search` is available:** call `tool_search(query="start process bash desktop commander")` to attempt to load Desktop Commander into your toolset. Verify afterward that you now have `Desktop Commander:start_process` or equivalent.
+
+3. **If process execution is missing AND `tool_search` is not available:** STOP. Tell Dan the specific tool names you do and do not have, and that session 8 cannot execute without process tools. Do not proceed to step 1. Do not start writing scripts you cannot run. Do not "plan around" the missing tools — session 7 already did the planning; session 8 exists to execute.
+
+4. **If process execution IS available:** do a quick smoke test to confirm it works. Run `echo "session 8 tool check $(date -u +%Y-%m-%dT%H:%M:%SZ)"` or equivalent. If the command succeeds and you see the expected output, you are cleared to proceed.
+
+5. **Verify filesystem access** to `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone` (the repo) and `/Users/danielsmith/Claude - RF 2.0/chroma_db/` (the Chroma DB). Confirm the repo is on branch `main` with a clean working tree before making any changes — if it's not clean, STOP and tell Dan what's uncommitted. (Run `git status` via your process tool.)
+
+**Only after all five checks pass do you proceed to step 1.**
 
 ---
 
@@ -94,7 +132,7 @@ Load filesystem and Desktop Commander tools via `tool_search`. Verify access to 
 - Prints: total count, the set of metadata keys observed across all 5 samples, and each sample's full metadata dict (redacted: if any sample's metadata contains Kelsey Poe / Erica / Dr. Christina names, mask them in the printed output — never to disk)
 - Calls **no write methods** under any code path
 
-**Run** the script via `Desktop Commander:start_process` (or directly if it's short enough). Capture stdout.
+**Run** the script via `Desktop Commander:start_process` (or equivalent process tool). Capture stdout.
 
 **Write** `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` capturing:
 - Exact count (confirming 9,224 or noting the discrepancy)
@@ -252,6 +290,8 @@ Handover + backlog:
 ```
 
 **Present the commit summary to Dan. Dan runs git.** Do NOT run git yourself.
+
+**Alternative: if the commit message is long, write it to `.session8_commit_msg.txt` at repo root via `Filesystem:write_file`, give Dan a one-liner `git commit -F .session8_commit_msg.txt`, and tell him to `rm .session8_commit_msg.txt` after. This is the pattern that worked at session 7 close when the editor paste went wrong.**
 
 ---
 
