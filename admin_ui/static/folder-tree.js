@@ -10,7 +10,12 @@
 
   // ── State ──────────────────────────────────────────────────────────
   var selectionState = {};  // folderId -> true (checked)
+  var libraryAssignments = {};  // folderId -> library name (e.g. 'rf_reference_library')
   var pendingSensitiveResolve = null;
+
+  // ── Available libraries (v1: Drive loader only writes to rf_reference_library) ──
+  var AVAILABLE_LIBRARIES = ['rf_reference_library'];
+  var DEFAULT_LIBRARY = 'rf_reference_library';
 
   // ── DOM refs ───────────────────────────────────────────────────────
   var tree = document.getElementById('folder-tree');
@@ -21,6 +26,9 @@
   var saveBtn = document.getElementById('btn-save');
   var refreshBtn = document.getElementById('btn-refresh');
   var toast = document.getElementById('save-toast');
+  var pendingPanel = document.getElementById('pending-selections');
+  var pendingList = document.getElementById('pending-list');
+  var pendingCount = document.getElementById('pending-count');
 
   // ── Init ───────────────────────────────────────────────────────────
   if (tree) {
@@ -435,12 +443,175 @@
     });
   }
 
+  // ── Pending Selections panel ───────────────────────────────────────
+  function getFolderDisplayInfo(folderId) {
+    // Find the tree node for this folder ID and pull its display name + ancestor path
+    var node = tree.querySelector('.tree-node[data-id="' + folderId + '"]');
+    if (!node) {
+      // Fallback: it might be a drive-level checkbox
+      var driveCheck = tree.querySelector('.drive-check[data-id="' + folderId + '"]');
+      if (driveCheck) {
+        var driveEl = driveCheck.closest('.tree-drive');
+        var driveName = driveEl ? driveEl.querySelector('.drive-name').textContent.trim() : folderId;
+        return { name: driveName, path: '(entire drive)' };
+      }
+      return { name: folderId, path: '' };
+    }
+    var nameEl = node.querySelector('.folder-name');
+    var name = nameEl ? nameEl.textContent.trim() : folderId;
+    // Build ancestor chain by walking up .tree-node-wrapper parents
+    var path = [];
+    var current = node.closest('.tree-node-wrapper');
+    while (current) {
+      var parentWrapper = current.parentElement && current.parentElement.closest('.tree-node-wrapper');
+      if (parentWrapper) {
+        var parentName = parentWrapper.querySelector(':scope > .tree-node > .folder-name');
+        if (parentName) path.unshift(parentName.textContent.trim());
+      } else {
+        var driveEl2 = current.closest('.tree-drive');
+        if (driveEl2) {
+          var dn = driveEl2.querySelector('.drive-name');
+          if (dn) path.unshift(dn.textContent.trim());
+        }
+        break;
+      }
+      current = parentWrapper;
+    }
+    return { name: name, path: path.join(' / ') };
+  }
+
+  function renderPendingSelections() {
+    if (!pendingPanel || !pendingList || !pendingCount) return;
+    var ids = Object.keys(selectionState);
+    pendingCount.textContent = '(' + ids.length + ')';
+    if (ids.length === 0) {
+      pendingPanel.classList.add('hidden');
+      pendingList.innerHTML = '';
+      return;
+    }
+    pendingPanel.classList.remove('hidden');
+    pendingList.innerHTML = '';
+    for (var i = 0; i < ids.length; i++) {
+      var fid = ids[i];
+      // Default-assign to library if not already set
+      if (!libraryAssignments[fid]) {
+        libraryAssignments[fid] = DEFAULT_LIBRARY;
+      }
+      var info = getFolderDisplayInfo(fid);
+      var row = document.createElement('div');
+      row.className = 'pending-row';
+      row.dataset.folderId = fid;
+
+      var infoEl = document.createElement('div');
+      infoEl.className = 'pending-row-info';
+      var nameEl = document.createElement('span');
+      nameEl.className = 'pending-row-name';
+      nameEl.textContent = info.name;
+      var pathEl = document.createElement('span');
+      pathEl.className = 'pending-row-path';
+      pathEl.textContent = info.path;
+      infoEl.appendChild(nameEl);
+      infoEl.appendChild(pathEl);
+      row.appendChild(infoEl);
+
+      var select = document.createElement('select');
+      select.className = 'pending-row-library';
+      select.dataset.folderId = fid;
+      for (var j = 0; j < AVAILABLE_LIBRARIES.length; j++) {
+        var opt = document.createElement('option');
+        opt.value = AVAILABLE_LIBRARIES[j];
+        opt.textContent = AVAILABLE_LIBRARIES[j];
+        if (AVAILABLE_LIBRARIES[j] === libraryAssignments[fid]) opt.selected = true;
+        select.appendChild(opt);
+      }
+      (function (sel, fid2) {
+        sel.addEventListener('change', function () {
+          libraryAssignments[fid2] = sel.value;
+        });
+      })(select, fid);
+      row.appendChild(select);
+
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'pending-row-remove';
+      rm.title = 'Remove from selection';
+      rm.textContent = '×';
+      (function (fid3) {
+        rm.addEventListener('click', function () {
+          // Uncheck the corresponding checkbox in the tree (fires its change handler, which updates selectionState + parents)
+          var chk = tree.querySelector('.tree-check[data-id="' + fid3 + '"]');
+          if (chk && chk.checked) {
+            chk.checked = false;
+            // Manually mirror the change handler effects:
+            delete selectionState[fid3];
+            delete libraryAssignments[fid3];
+            // Also cascade & update parents
+            var wrapper = chk.closest('.tree-node-wrapper');
+            var driveEl3 = chk.closest('.tree-drive');
+            var childContainer = wrapper
+              ? wrapper.querySelector(':scope > .tree-children')
+              : (driveEl3 ? driveEl3.querySelector('.tree-children') : null);
+            if (childContainer) cascadeDown(childContainer, false);
+            updateParentCheck(wrapper ? wrapper.parentElement : (driveEl3 ? driveEl3 : null));
+          } else {
+            // Already unchecked somehow — just clean up state
+            delete selectionState[fid3];
+            delete libraryAssignments[fid3];
+          }
+          renderPendingSelections();
+        });
+      })(fid);
+      row.appendChild(rm);
+
+      pendingList.appendChild(row);
+    }
+    // Garbage-collect library_assignments entries for folders no longer selected
+    var validKeys = {};
+    for (var k = 0; k < ids.length; k++) validKeys[ids[k]] = true;
+    for (var key in libraryAssignments) {
+      if (!validKeys[key]) delete libraryAssignments[key];
+    }
+  }
+
+  // Hook the pending-panel re-render into checkbox cascades.
+  // We wrap cascadeDown and updateParentCheck so any path that mutates
+  // selectionState triggers a re-render, without having to touch every
+  // event handler individually.
+  var _origCascade = cascadeDown;
+  cascadeDown = function (container, checked) {
+    _origCascade(container, checked);
+    renderPendingSelections();
+  };
+  var _origUpdateParent = updateParentCheck;
+  updateParentCheck = function (container) {
+    _origUpdateParent(container);
+    renderPendingSelections();
+  };
+
   // ── Save ───────────────────────────────────────────────────────────
   if (saveBtn) {
     saveBtn.addEventListener('click', function () {
       var selectedFolders = Object.keys(selectionState);
       if (selectedFolders.length === 0) {
         showToast('No folders selected', 'error');
+        return;
+      }
+
+      // Build library_assignments from the panel state.
+      // Schema rule: every selected folder must have an assignment.
+      var assignments = {};
+      var missing = [];
+      for (var i = 0; i < selectedFolders.length; i++) {
+        var fid = selectedFolders[i];
+        var lib = libraryAssignments[fid];
+        if (!lib || AVAILABLE_LIBRARIES.indexOf(lib) === -1) {
+          missing.push(fid);
+        } else {
+          assignments[fid] = lib;
+        }
+      }
+      if (missing.length > 0) {
+        showToast(missing.length + ' folder(s) missing a library assignment', 'error');
         return;
       }
 
@@ -452,7 +623,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           selected_folders: selectedFolders,
-          library_assignments: {},
+          library_assignments: assignments,
           timestamp: new Date().toISOString(),
         }),
       })

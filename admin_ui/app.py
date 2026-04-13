@@ -425,6 +425,22 @@ def api_folders_save():
     if not data:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
+    # Schema validation: every selected folder must have a library assignment.
+    # Defense in depth — the frontend enforces this too, but a malformed POST
+    # (or a future caller bypassing the UI) must not silently land with empty
+    # assignments. v1 only allows rf_reference_library as a target.
+    ALLOWED_LIBRARIES = {"rf_reference_library"}
+    selected = data.get("selected_folders", []) or []
+    assignments = data.get("library_assignments", {}) or {}
+    if not isinstance(selected, list) or not isinstance(assignments, dict):
+        return jsonify({"ok": False, "error": "selected_folders must be list, library_assignments must be dict"}), 400
+    missing = [fid for fid in selected if fid not in assignments]
+    if missing:
+        return jsonify({"ok": False, "error": f"missing library assignment for {len(missing)} folder(s)"}), 400
+    bad_libs = [v for v in assignments.values() if v not in ALLOWED_LIBRARIES]
+    if bad_libs:
+        return jsonify({"ok": False, "error": f"library not in allowed set: {bad_libs[:3]}"}), 400
+
     state_path = Path(os.environ.get("INGESTER_DATA_ROOT", "data")) / "selection_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json_mod.dumps(data, indent=2, default=str))

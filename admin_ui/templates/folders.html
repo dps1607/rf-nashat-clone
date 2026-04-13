@@ -27,6 +27,14 @@
     <button class="btn-primary" id="btn-save">Save Selection</button>
   </div>
 
+  <div class="pending-selections hidden" id="pending-selections">
+    <div class="pending-header">
+      <h3 class="pending-title">Pending Selections <span id="pending-count">(0)</span></h3>
+      <span class="pending-hint">Each folder must be assigned to a target library before saving.</span>
+    </div>
+    <div class="pending-list" id="pending-list"></div>
+  </div>
+
   <div class="folder-tree" id="folder-tree">
     {% for drive in drives %}
     <div class="tree-drive {% if drive.status == 'not_shared' %}drive-disabled{% endif %}"

@@ -1,6 +1,7 @@
 # STATE OF PLAY — corrected current-state document
 
 **Written:** 2026-04-13 (session 9, stabilization session)
+**Amended:** 2026-04-13 (session 10, drive loader pilot — see § "Session 10 amendment" near the bottom)
 **Supersedes orientation in:** `docs/HANDOVER.md` session 7 entry, `docs/NEXT_SESSION_PROMPT.md`, large parts of `docs/REPO_MAP.md` and `docs/ARCHITECTURE.md` that describe local Chroma as primary
 **Earlier handover entries:** preserved as history; do not drive next-session work
 **Status:** Authoritative orientation surface for sessions 10+
@@ -198,3 +199,39 @@ Two paragraphs. Read these if you are a future Claude session about to read the 
 ## What the next session (session 10) should do
 
 See `docs/NEXT_SESSION_PROMPT.md` for the full bootstrap. Short version: drive the folder-selection UI end-to-end with one real folder, building the read-time normalizer for citation rendering as a side quest if and only if it surfaces as the actual blocker. The metadata work from sessions 5–8 stays frozen. ADR_006 and the three plans stay in the repo as history.
+
+---
+
+## Session 10 amendment (2026-04-13) — drive loader pilot, dry-run only
+
+Session 10 took Re-Scope B from its own staircase: ship the library-picker UI patch + the Drive content loader as code, exercise the loader in dry-run mode against one real folder, stop short of any actual ingest. Full session entry is in `docs/HANDOVER.md` under "Session 10". Full design rationale is in `docs/plans/2026-04-13-drive-loader-pilot.md`.
+
+**What changed about the world (versus the body of this document above):**
+
+1. **Gap 1 from the body of this doc — "save persists state, but no downstream ingestion trigger consumes that state" — is HALF closed.** The library picker now exists in the UI (`Pending Selections` panel + per-folder dropdown) and the save endpoint validates assignments. The "no downstream consumer" half of Gap 1 is now addressed by the loader (next bullet), but only in dry-run.
+
+2. **The Drive content loader exists.** `ingester/loaders/drive_loader.py`. Reads `selection_state.json`, walks the selected folder via the existing `DriveClient`, exports Google Docs to plain text, chunks paragraph-aware, writes 21-field-per-chunk metadata including all 5 `display_*` normalization fields and the `source_folder_id` slicing key. **It has never been run with `--commit`.** Dry-run only as of session 10 end.
+
+3. **The 5-field display normalization shape from this doc's "minimum bar for metadata consistent enough" section is now realized at ingest time** for any chunk the new loader writes. The future read-time normalizer in `rag_server/app.py:format_context()` will need to handle coaching and A4M chunks (which lack these fields) but can read drive-loader chunks through unchanged. The forward-compat decision was honored.
+
+4. **One critical loader finding that's likely to bite session 11:** Drive's `text/plain` export of Google Docs is lossy. The pilot folder's largest file (4.3 MB by Drive metadata) exported to ~3 KB of text. Tables, images, and formatting do not survive. The v1 chunker is therefore functionally untested against multi-chunk content because every pilot file fit in a single chunk. A v2 loader probably needs HTML or DOCX export, not `text/plain`.
+
+**What did NOT change:**
+
+- Railway production. Untouched. `console.drnashatlatib.com` still serving the 2026-04-09 deploy.
+- `rf_coaching_transcripts` (9,224 chunks) and `rf_reference_library` (584 chunks). Untouched. No writes, no reads-with-side-effects.
+- `data/selection_state.json`. Still contains the placeholder `["abc","def"]`. The pilot used `/tmp/rf_pilot_selection.json`.
+- ADR_006, the three plans from session 7, the marker flag work, the QPT flag work. All still frozen.
+- The session-7 reading list and prior handover history. Still preserved as history. STATE_OF_PLAY (this doc, with this amendment) is still the authoritative orientation surface.
+
+**Pointer to the next-session prompt:** `docs/NEXT_SESSION_PROMPT.md` should be refreshed by session 11 (or by Dan if he refreshes it before session 11 starts) to reflect the new state. The session-10 work removed two of session 10's three tasks; the remaining task ("commit-run the loader against a real folder") plus the lossy-export finding should drive session 11's framing.
+
+### Session 10 addendum — low-yield safety guard added
+
+After post-run inspection of the dry-run dump confirmed the lossy-export problem (the 4.3 MB "Comprehensive List of Supplements and substitutions" exported to ~3 KB of placeholder text with all substitution data trapped in product images), the v1 drive_loader gained a `--dump-json` inspection flag and a hard-coded `low_text_yield` skip guard.
+
+**The guard:** Google Docs ≥10 KB on Drive whose `exported_chars / drive_size_bytes < 5%` are skipped with reason `low_text_yield`, deferred to a future v2 loader. v2 is sketched in the session 10 HANDOVER addendum: HTML export + Gemini OCR on embedded images. Not built yet.
+
+**Effect on the Supplement Info pilot:** of 4 files in the folder, only 1 (Professional Nutritionals FKP Schedule, 96% yield) would now ingest. 2 files skipped as low_yield, 1 skipped as unsupported_mime (spreadsheet).
+
+**Strategic note for session 11+:** The v1 loader is now intentionally conservative — it only ingests content that survives plain-text export. This means most image-heavy reference material in the Drive (which is much of it, given how Dr. Nashat builds visual handouts) is **un-ingestible by v1**. Building v2 is the natural next major piece of work. Until v2 lands, session 11 needs to either commit-run v1 against the small subset of text-heavy content, or skip ahead to v2.

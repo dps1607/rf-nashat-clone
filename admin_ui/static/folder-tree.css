@@ -434,3 +434,119 @@
     max-width: none;
   }
 }
+
+/* ============================================================
+   Pending Selections panel — Phase D-post (session 10)
+   Library picker for selected folders before save.
+   ============================================================ */
+
+.pending-selections {
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.25rem;
+  background: var(--off-white, #FBFBFB);
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 8px;
+}
+
+.pending-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.pending-title {
+  font-family: var(--serif, 'Cormorant Garamond', serif);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--navy, #142A40);
+  margin: 0;
+}
+
+.pending-hint {
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.75rem;
+  color: var(--gray, #8C8589);
+  font-style: italic;
+}
+
+.pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pending-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--white, #FFFFFF);
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 6px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.825rem;
+}
+
+.pending-row-info {
+  min-width: 0;
+}
+
+.pending-row-name {
+  display: block;
+  font-weight: 500;
+  color: var(--charcoal, #3A393A);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pending-row-path {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--gray, #8C8589);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+
+.pending-row-library {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--gray-light, #D2D0D2);
+  border-radius: 4px;
+  font-family: var(--sans, 'Inter', sans-serif);
+  font-size: 0.8rem;
+  color: var(--charcoal, #3A393A);
+  background: var(--white, #FFFFFF);
+  cursor: pointer;
+}
+
+.pending-row-library:focus {
+  outline: none;
+  border-color: var(--navy, #142A40);
+}
+
+.pending-row-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  background: transparent;
+  color: var(--gray, #8C8589);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pending-row-remove:hover {
+  background: var(--rose-pale, #faeeec);
+  color: var(--coral, #F37C7B);
+}

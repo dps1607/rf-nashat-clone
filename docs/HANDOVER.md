@@ -6,6 +6,115 @@ Updated in place each session-end. Read this first to resume.
 
 ---
 
+## Session 10 — 2026-04-13 — Drive loader pilot (dry-run only)
+
+**Scope shipped:** Re-Scope B from session-10 staircase. Library-picker UI patch + Drive content loader (dry-run only). NO actual ingest. NO embedding spend. NO Chroma writes. NO Railway changes.
+
+**Step 0 reality check:** PASSED. All five session-9 verification gates green. No drift from STATE_OF_PLAY's description of the world.
+
+### What landed
+
+1. **Design doc**: `docs/plans/2026-04-13-drive-loader-pilot.md` — full architecture, metadata schema, CLI shape, hard rules. Read this before touching `ingester/loaders/drive_loader.py`.
+
+2. **Library-picker UI** (closes Gap 1 from STATE_OF_PLAY):
+   - `admin_ui/templates/folders.html` — added Pending Selections panel between toolbar and tree
+   - `admin_ui/static/folder-tree.js` — `renderPendingSelections()`, `getFolderDisplayInfo()`, dropdown wiring, modified save handler. Functional: hooks into `cascadeDown`/`updateParentCheck` via wrapper-reassignment trick at IIFE init time.
+   - `admin_ui/static/folder-tree.css` — pending panel styling, +116 lines, all using existing CSS vars
+   - `admin_ui/app.py` — `/admin/api/folders/save` now validates: every selected folder has a library assignment AND every assignment is in `ALLOWED_LIBRARIES = {"rf_reference_library"}`. Returns HTTP 400 on violation.
+   - **Verified end to end** with Flask test client: 3 reject scenarios (empty assignments, partial assignments, bad library name) + 1 accept scenario (writes correct JSON to disk).
+
+3. **Drive loader** (closes Gap 2 from STATE_OF_PLAY, dry-run only):
+   - `ingester/loaders/__init__.py` — package marker
+   - `ingester/loaders/drive_loader.py` — 723 lines. CLI tool. Reads `selection_state.json`, fetches Drive folder contents via the existing `DriveClient`, exports Google Docs to plain text, chunks paragraph-aware, and (in commit mode) embeds via OpenAI `text-embedding-3-large` and writes to local Chroma.
+   - **Hard guards in code (not docs)**: refuses to run if `CHROMA_DB_PATH` starts with `/data/`, refuses placeholder `["abc","def"]`, refuses missing assignments, refuses non-allowed libraries, requires `OPENAI_API_KEY` for `--commit`. `--dry-run` is the default; `--commit` must be passed explicitly.
+   - **Metadata schema**: 21 fields per chunk including `source_folder_id` (Interpretation-3 slicing key for future per-clone work) and the 5 `display_*` fields (forward-compat with the read-time normalizer side quest from STATE_OF_PLAY). Does NOT use ADR_006 marker flags or QPT flags — those remain frozen.
+   - **Chunk ID format**: `drive:{drive_slug}:{file_id}:{chunk_index:04d}`. Collision-proof against existing `a4m-m{N}-{type}-{NNN}` and `CHUNK-{N}-{N}` formats.
+   - **Chunking**: paragraph-aware sliding window, 700-word ceiling, 80-word floor, paragraph-level overlap. Sentence-level repack for over-long paragraphs. NOT LLM-driven (the v3 LLM chunker is wrong fit for non-Q&A content).
+
+4. **Pilot dry-run executed** against `Supplement Info` (folder `1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54` in `1-operations`, 4 files: 3 Google Docs + 1 Sheet). Result: 3 files ingested → 3 chunks, 1 file skipped (`unsupported_mime` — spreadsheet support deferred), estimated cost $0.0002. No writes.
+
+5. **`normalize_text` BOM fix**: Drive's `text/plain` export prepends U+FEFF and may include other zero-width chars. Loader strips them at normalization time. Re-verified after fix.
+
+### Critical findings for whoever picks up the loader work
+
+1. **Google Doc text export is lossy.** The "Comprehensive List of Supplements and substitutions" file is 4.3 MB on disk (per Drive metadata) but only ~3 KB / 294 words after `text/plain` export. Tables, images, embedded objects, and rich formatting do not survive. **Implication**: a v2 loader probably needs HTML or DOCX export instead of plain text, OR a separate visual-aware path for content-rich documents. The v1 chunker is therefore functionally untested against multi-chunk content because every pilot file fit in a single chunk — every chunk count was 1.
+
+2. **The picker dropdown is single-option in v1.** Only `rf_reference_library` is in `AVAILABLE_LIBRARIES`. Adding `rf_published_content` is a one-line change once that collection exists. Coaching is intentionally excluded for HIPAA/category reasons.
+
+3. **`data/selection_state.json` is still the placeholder `["abc","def"]`.** I did not touch it. The pilot run used `/tmp/rf_pilot_selection.json`. The real file gets written when you click save in the browser, OR when a future session drives the loader against a real selection.
+
+4. **Visual UI not tested in browser.** Only the data path was tested (via Flask test client). You'll want to spin up the admin UI locally and click through the Pending Selections panel before considering this UI ready for Nashat to use.
+
+### Hard rules honored (verbatim from sessions 7, 8, 9)
+- No ChromaDB writes ✓ (dry-run only)
+- No Railway operations ✓ (loader actively refuses `/data/` paths)
+- No git operations by Claude ✓ (Dan runs git)
+- No deletions ✓
+- No reference to Dr. Christina ✓ (n/a — Drive content)
+- Credentials ephemeral ✓ (`.env` was read once for verification, dropped from working memory at Dan's instruction; will not be re-read)
+
+### Tree state at session end
+- 4 files modified (`admin_ui/app.py`, `admin_ui/static/folder-tree.css`, `admin_ui/static/folder-tree.js`, `admin_ui/templates/folders.html`)
+- 3 files new (`docs/plans/2026-04-13-drive-loader-pilot.md`, `ingester/loaders/__init__.py`, `ingester/loaders/drive_loader.py`)
+- ~1300 lines added
+- Everything reversible via `git checkout` + `rm` of the new files
+- Branch `main`, in sync with `origin/main`, no commits made
+
+### What session 11 should consider doing first
+
+Pick one (in order of likely impact):
+
+1. **Visual sanity-test the picker UI in a browser.** Spin up the admin UI locally, navigate to `/admin/folders`, click a folder, confirm the Pending Selections panel appears with the correct name/path/dropdown. This is the only piece of session-10 work that wasn't user-tested.
+2. **Decide whether to flip the loader to commit mode against `Supplement Info`.** Cost: $0.0002. Output: 3 chunks in local `rf_reference_library` (which would grow from 584 → 587). Reversible via the chunk IDs in the run record. This is the smallest, lowest-risk way to validate the whole pipeline against real data.
+3. **OR**: address the Google Doc export issue first (item 1 in critical findings). If the v1 loader is going to be used for real reference content, the lossy-export problem will bite immediately. Switching to HTML export + a markdownify pass would likely recover most of the missing content.
+4. **Optional side-quest**: build the read-time normalizer in `rag_server/app.py:format_context()` per STATE_OF_PLAY's "minimum bar for metadata consistent enough" section. The loader already writes the `display_*` fields at ingest time, so the normalizer can read them through unchanged. ~50 lines.
+
+**Do NOT in session 11**: re-open ADR_006, re-derive Plan 1/2/3, push anything to Railway without an explicit pre-flight discussion, or commit-mode-run the loader without first eyeballing what happens to the Google Doc export problem.
+
+### Session 10 addendum — `--dump-json` flag + low-yield safety guard
+
+After the initial dry-run, Dan inspected the captured content and confirmed the lossy-export hypothesis: the 4.3 MB "Comprehensive List of Supplements and substitutions" Google Doc contains product-image substitutions that don't survive `text/plain` export. The exported text is ~3 KB of structural placeholders ("Substitute if OOS:" headers followed by blank space where the image-based substitute names should be).
+
+**Two changes shipped in response:**
+
+1. **`--dump-json PATH` flag added to drive_loader.** Dry-run-only inspection artifact: writes the full raw exported text per file + all chunks + all metadata to a JSON file, so a human can eyeball what the loader actually captured before committing anything. Pure inspection, no Chroma writes, no embedding spend. Used for the post-run audit.
+
+2. **Low-text-yield safety guard added to drive_loader.** Constants: `LOW_YIELD_RATIO_THRESHOLD = 0.05` (5%), `LOW_YIELD_MIN_BYTES = 10_000` (10 KB floor). For Google Docs ≥10 KB on Drive, if `exported_chars / drive_size_bytes < 5%`, the file is skipped with reason `low_text_yield` and a note "defer to v2 loader". The 10 KB floor exists because small text-only docs can have unusual ratios from Drive metadata overhead, and the guard would false-positive on them.
+
+**Verified post-guard behavior on Supplement Info pilot folder:**
+- Files seen: 4
+- Files ingested: 1 (Professional Nutritionals FKP Schedule, 96% yield)
+- Files skipped: 3
+  - 2 × `low_text_yield`: Comprehensive (0.07% yield), Supplement Details (0.45% yield)
+  - 1 × `unsupported_mime`: Supplement List with Brands (spreadsheet)
+- Estimated commit cost: $0.0001
+
+**Strategic implication for session 11+:**
+
+The v1 loader is now conservative-by-default: it will only ingest content that survives plain-text export cleanly. This is the right behavior for unblocking a low-risk pilot commit run, but it means **most image-heavy reference content in the Drive is currently un-ingestible by v1**. The folders most likely to contain valuable RF reference material (clinical handouts, supplement protocols, lab interpretation guides) are precisely the folders most likely to be image-heavy.
+
+**Building the v2 path is the natural next major piece of work.** Sketch:
+- Use Drive `files().export(mimeType="text/html")` instead of `text/plain` for Google Docs
+- Parse the HTML to extract embedded image URLs (Drive serves them via authenticated googleusercontent.com URLs)
+- Download each image using the existing service account credentials
+- Send each image to Gemini 2.5 Flash for OCR + visual description (the existing `ingester/config.py` already names this model)
+- Stitch the OCR'd text back into the document at the correct position
+- Chunk the stitched result the same way v1 does
+
+Estimated cost: probably $0.001–0.01 per image-heavy document, depending on image count. Probably 2–4 hours of dev work for the v2 loader. Should be its own session, not bolted onto session 11.
+
+**Until v2 lands, session 11's options are:**
+1. Commit-run the v1 loader against Supplement Info anyway. 1 file lands, 2 deferred. Validates the full pipeline on real data with $0.0001 spend. Defensible as a pilot-of-the-pilot.
+2. Pick a different Drive folder more likely to have text-heavy content (e.g. policies, protocols written as prose). Better v1 fit but won't validate the guard.
+3. Skip ahead to building v2. Higher impact, higher complexity, higher cost. Probably the right answer if the v1-only content base is too thin to be useful.
+
+**Inspection artifacts on disk:**
+- `data/dumps/supplement_info_pilot.json` — original dry-run dump (3 files would ingest)
+- `data/dumps/supplement_info_pilot_v1guard.json` — post-guard dry-run dump (1 file would ingest, 2 flagged low_yield)
+
+
+---
+
 ## 2026-04-13 (session 9) — Stabilization: corrected drift inherited from sessions 5–8
 
 **Status:** Stabilization session. No production code shipped, no Chroma writes, no git operations performed by Claude. Output is documentation: a corrected current-state doc (`docs/STATE_OF_PLAY.md`), a refreshed BACKLOG with session 9 entries superseding session 7's framing, a rewritten next-session prompt pointing session 10 at the folder-selection UI thread, and two read-only inventory scripts (`scripts/peek_coaching_schema.py`, `scripts/peek_reference_library.py`).
