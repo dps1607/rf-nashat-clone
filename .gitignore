@@ -55,3 +55,15 @@ data/
 
 # Admin UI audit log (append-only, local only)
 audit.jsonl
+
+# Session 12+: vision OCR cache (27 cached Gemini responses, regenerable)
+data/image_ocr_cache/
+
+# Session 12: eyeball-review HTML artifacts (regenerable via scripts/build_image_review.py)
+data/image_samples/
+
+# Session 11+: v2 ingest dumps (large JSON blobs, regenerable via --dump-json)
+data/dumps/
+
+# Session 13+: persistent skipped-files log (runtime artifact)
+data/skipped_files_log.jsonl
