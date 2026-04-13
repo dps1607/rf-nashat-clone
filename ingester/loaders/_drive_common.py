@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from ingester.text.scrub import scrub_text
+
 # -----------------------------------------------------------------------------
 # Repo root discovery
 # -----------------------------------------------------------------------------
@@ -146,7 +148,14 @@ def word_count(s: str) -> int:
 def chunk_text(text: str) -> list[dict]:
     """
     Paragraph-aware sliding-window chunker.
-    Returns list of dicts: {text, word_count, chunk_index}.
+    Returns list of dicts: {text, word_count, chunk_index, name_replacements}.
+
+    Each chunk's text is passed through `ingester.text.scrub.scrub_text()`
+    before being appended (Layer B name scrub). `name_replacements` captures
+    the per-chunk replacement count so downstream code can surface it in
+    metadata for observability. This is the single chokepoint shared by
+    v1 and v2 ingest, so any loader that chunks via this helper gets the
+    scrub automatically.
     """
     text = normalize_text(text)
     if not text:
@@ -186,10 +195,12 @@ def chunk_text(text: str) -> list[dict]:
         pw = word_count(p)
         if current_words + pw > MAX_CHUNK_WORDS and current_words >= MIN_CHUNK_WORDS:
             chunk_text_str = "\n\n".join(current)
+            scrubbed_text, n_replacements = scrub_text(chunk_text_str)
             chunks.append({
-                "text": chunk_text_str,
-                "word_count": current_words,
+                "text": scrubbed_text,
+                "word_count": word_count(scrubbed_text),
                 "chunk_index": chunk_index,
+                "name_replacements": n_replacements,
             })
             chunk_index += 1
             if PARAGRAPH_OVERLAP and current:
@@ -205,10 +216,12 @@ def chunk_text(text: str) -> list[dict]:
     if current:
         chunk_text_str = "\n\n".join(current)
         if current_words >= MIN_CHUNK_WORDS or chunk_index == 0:
+            scrubbed_text, n_replacements = scrub_text(chunk_text_str)
             chunks.append({
-                "text": chunk_text_str,
-                "word_count": current_words,
+                "text": scrubbed_text,
+                "word_count": word_count(scrubbed_text),
                 "chunk_index": chunk_index,
+                "name_replacements": n_replacements,
             })
 
     return chunks
@@ -241,6 +254,8 @@ def build_metadata_base(
         # Sequence + sizing
         "chunk_index": chunk["chunk_index"],
         "word_count": chunk["word_count"],
+        # Scrub observability (Layer B — see ingester/text/scrub.py)
+        "name_replacements": chunk.get("name_replacements", 0),
         # Provenance
         "source_pipeline": source_pipeline,
         "source_collection": library,

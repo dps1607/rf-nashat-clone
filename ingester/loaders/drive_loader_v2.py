@@ -53,8 +53,6 @@ from ingester.loaders._drive_common import (
     EMBEDDING_PRICE_PER_1M_TOKENS_USD,
     APPROX_CHARS_PER_TOKEN,
     COST_WARNING_THRESHOLD_USD,
-    LOW_YIELD_RATIO_THRESHOLD,
-    LOW_YIELD_MIN_BYTES,
     DEFAULT_SELECTION_FILE,
     load_latest_manifest,
     lookup_folder_in_manifest,
@@ -82,6 +80,29 @@ VISION_COST_HARD_GATE_USD = 25.00
 # Per-file vision failure rate ceiling
 VISION_FAILURE_RATE_CEILING = 0.20  # 20%
 VISION_FAILURE_MIN_IMAGES = 5  # only apply rate check to files with >=5 images
+
+# v2 low-yield guard — replaces the inherited v1 ratio check (which doesn't
+# make sense for v2 because stitched_chars / drive_size compares extracted
+# text to PNG byte size). Session 13 redesign: skip only if the content is
+# both thin AND had no usable image payoff. See docs/HANDOVER.md session 13.
+MIN_STITCHED_WORDS_FLOOR = 50
+
+# Persistent append-only log of every skip decision, across all runs.
+# Each line is a JSON object: run_id, timestamp, file name/id, reason, numbers.
+# Easy to `tail -f`, `grep`, or feed back into an audit UI later.
+SKIPPED_FILES_LOG = _REPO_ROOT / "data" / "skipped_files_log.jsonl"
+
+# v2 low-yield guard — replaces v1's ratio check, which is meaningless
+# for v2 because drive_size (compressed Drive storage) and stitched_chars
+# (extracted text + OCR captions) are apples-to-oranges. See session 13
+# HANDOVER entry for the full rationale. Rule: skip only if short AND
+# no usable image payoff.
+MIN_STITCHED_WORDS_FLOOR = 50
+
+# Persistent cross-run log of skipped files. Append-only JSONL so you
+# can grep / tail / load in pandas to see everything that has ever been
+# skipped by v2, across sessions. One line per skip.
+SKIPPED_FILES_LOG = _REPO_ROOT / "data" / "skipped_files_log.jsonl"
 
 # OCR cache on disk
 OCR_CACHE_DIR = _REPO_ROOT / "data" / "image_ocr_cache"
@@ -354,6 +375,43 @@ def build_metadata_v2(
 
 
 # -----------------------------------------------------------------------------
+# Skip logging (persistent, append-only across runs)
+# -----------------------------------------------------------------------------
+
+def log_skipped_file(
+    ingest_run_id: str,
+    ingest_timestamp_utc: str,
+    pipeline: str,
+    reason: str,
+    file_record: dict,
+    details: dict,
+) -> None:
+    """
+    Append one JSON line to data/skipped_files_log.jsonl describing a
+    skipped file. Persists across runs so Dan can inspect or grep the
+    full history of skips. Best-effort — failure to write must not
+    block the ingest run.
+    """
+    entry = {
+        "run_id": ingest_run_id,
+        "timestamp_utc": ingest_timestamp_utc,
+        "pipeline": pipeline,
+        "reason": reason,
+        "file_id": file_record.get("id", ""),
+        "file_name": file_record.get("name", ""),
+        "folder_id": file_record.get("folder_id", ""),
+        "folder_path": file_record.get("folder_path", ""),
+        "details": details,
+    }
+    try:
+        SKIPPED_FILES_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(SKIPPED_FILES_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"      WARN: could not write skipped_files_log: {e}", file=sys.stderr)
+
+
+# -----------------------------------------------------------------------------
 # Cost projection
 # -----------------------------------------------------------------------------
 
@@ -372,6 +430,36 @@ def project_vision_cost(image_count: int) -> float:
         est_input / 1_000_000 * VISION_INPUT_PRICE_PER_1M
         + est_output / 1_000_000 * VISION_OUTPUT_PRICE_PER_1M
     )
+
+
+# -----------------------------------------------------------------------------
+# Skip logging
+# -----------------------------------------------------------------------------
+
+def count_usable_images(per_image_records: list[dict]) -> int:
+    """
+    A record is "usable" if it did not fail download, was not classified
+    as decorative, and did not fail OCR. Shape note: download failures
+    set only `download_failed`; OCR records set `is_decorative`, `failed`,
+    plus others. `.get()` with a default handles both cases.
+    """
+    return sum(
+        1 for r in per_image_records
+        if not r.get("download_failed")
+        and not r.get("is_decorative")
+        and not r.get("failed")
+    )
+
+
+def append_skip_log(entry: dict) -> None:
+    """
+    Append one skip record to the persistent JSONL log. Each line is a
+    self-contained JSON object so you can `tail -f`, `grep`, or load the
+    whole file with `pd.read_json(..., lines=True)`.
+    """
+    SKIPPED_FILES_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(SKIPPED_FILES_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 # -----------------------------------------------------------------------------
@@ -539,6 +627,8 @@ def run(
             )
             post_failed = vision_client.ledger.images_failed
             file_failed = post_failed - pre_failed
+            stitched_chars = len(stitched)
+            stitched_words = word_count(stitched)
 
             # Per-file failure rate gate
             if actual_img_count >= VISION_FAILURE_MIN_IMAGES:
@@ -548,39 +638,117 @@ def run(
                         f"      SKIP: vision_failure_rate_too_high "
                         f"({file_rate*100:.1f}% > {VISION_FAILURE_RATE_CEILING*100:.0f}%)"
                     )
+                    skip_details = {
+                        "image_count": actual_img_count,
+                        "failed_count": file_failed,
+                        "failure_rate": round(file_rate, 4),
+                        "stitched_chars": stitched_chars,
+                        "stitched_words": stitched_words,
+                    }
                     files_vision_failed_skipped.append({
                         "name": name,
                         "file_id": file_id,
-                        "image_count": actual_img_count,
-                        "failed_count": file_failed,
+                        **skip_details,
+                    })
+                    log_skipped_file(
+                        ingest_run_id, ingest_timestamp_utc, SOURCE_PIPELINE,
+                        "vision_failure_rate_too_high",
+                        {
+                            "id": file_id, "name": name,
+                            "folder_id": folder_id,
+                            "folder_path": folder_meta["folder_path"],
+                        },
+                        skip_details,
+                    )
+                    # Bug fix: populate all_files_dumped on skip paths
+                    all_files_dumped.append({
+                        "file_id": file_id,
+                        "name": name,
+                        "mime": mime,
+                        "drive_modified": modified,
+                        "drive_size_bytes": drive_size,
+                        "html_bytes": len(html_bytes),
+                        "stream_text_blocks": text_count,
+                        "stream_image_count": img_count,
+                        "stitched_chars": stitched_chars,
+                        "stitched_words": stitched_words,
+                        "chunk_count": 0,
+                        "vision_failed_count": file_failed,
+                        "stitched_text": stitched,
+                        "per_image_ocr": per_image_records,
+                        "skipped": True,
+                        "skip_reason": "vision_failure_rate_too_high",
                     })
                     total_files_skipped += 1
                     print()
                     continue
 
-            stitched_chars = len(stitched)
-            stitched_words = word_count(stitched)
             print(f"      stitched:     {stitched_chars:,} chars / {stitched_words:,} words")
 
-            # v2 low-yield guard (same threshold, new numerator)
-            if drive_size >= LOW_YIELD_MIN_BYTES:
-                ratio = stitched_chars / drive_size
-                if ratio < LOW_YIELD_RATIO_THRESHOLD:
-                    print(
-                        f"      SKIP: low_yield_even_with_vision "
-                        f"({ratio*100:.2f}% < {LOW_YIELD_RATIO_THRESHOLD*100:.0f}% threshold)"
-                    )
-                    files_low_yield_skipped.append({
-                        "name": name,
-                        "file_id": file_id,
-                        "drive_size_bytes": drive_size,
-                        "stitched_chars": stitched_chars,
-                        "ratio": ratio,
-                        "image_count": actual_img_count,
-                    })
-                    total_files_skipped += 1
-                    print()
-                    continue
+            # v2 low-yield guard: skip only if the file is BOTH too thin to
+            # chunk meaningfully AND had no usable image payoff. Replaces
+            # the inherited v1 ratio check (see session 13 HANDOVER).
+            usable_images = sum(
+                1 for rec in per_image_records
+                if not rec.get("is_decorative")
+                and not rec.get("failed")
+                and not rec.get("download_failed")
+            )
+            if stitched_words < MIN_STITCHED_WORDS_FLOOR and usable_images == 0:
+                print(
+                    f"      SKIP: low_yield_even_with_vision "
+                    f"({stitched_words} words < {MIN_STITCHED_WORDS_FLOOR} floor "
+                    f"AND 0 usable images)"
+                )
+                preview = stitched.strip().replace("\n", " ")[:160]
+                print(f"      preview:      \"{preview}{'...' if len(stitched) > 160 else ''}\"")
+                skip_details = {
+                    "drive_size_bytes": drive_size,
+                    "stitched_chars": stitched_chars,
+                    "stitched_words": stitched_words,
+                    "image_count": actual_img_count,
+                    "usable_images": usable_images,
+                    "stitched_text_preview": preview,
+                }
+                files_low_yield_skipped.append({
+                    "name": name,
+                    "file_id": file_id,
+                    **skip_details,
+                })
+                log_skipped_file(
+                    ingest_run_id, ingest_timestamp_utc, SOURCE_PIPELINE,
+                    "low_yield_even_with_vision",
+                    {
+                        "id": file_id, "name": name,
+                        "folder_id": folder_id,
+                        "folder_path": folder_meta["folder_path"],
+                    },
+                    skip_details,
+                )
+                # Bug fix: populate all_files_dumped on skip paths so the
+                # dump-json captures the full stitched text and per-image
+                # OCR records of skipped files. Session 11 left this out.
+                all_files_dumped.append({
+                    "file_id": file_id,
+                    "name": name,
+                    "mime": mime,
+                    "drive_modified": modified,
+                    "drive_size_bytes": drive_size,
+                    "html_bytes": len(html_bytes),
+                    "stream_text_blocks": text_count,
+                    "stream_image_count": img_count,
+                    "stitched_chars": stitched_chars,
+                    "stitched_words": stitched_words,
+                    "chunk_count": 0,
+                    "vision_failed_count": file_failed,
+                    "stitched_text": stitched,
+                    "per_image_ocr": per_image_records,
+                    "skipped": True,
+                    "skip_reason": "low_yield_even_with_vision",
+                })
+                total_files_skipped += 1
+                print()
+                continue
 
             chunks = chunk_text(stitched)
             print(f"      chunks:       {len(chunks)}")
@@ -667,7 +835,13 @@ def run(
     if files_low_yield_skipped:
         print(f"    of which low_yield_even_with_vision: {len(files_low_yield_skipped)}")
         for ly in files_low_yield_skipped:
-            print(f"      - {ly['name']} ({ly['ratio']*100:.2f}% yield, {ly['image_count']} images)")
+            print(
+                f"      - {ly['name']} "
+                f"({ly['stitched_words']}w stitched, "
+                f"{ly['usable_images']}/{ly['image_count']} usable images)"
+            )
+            if ly.get("stitched_text_preview"):
+                print(f"          preview: \"{ly['stitched_text_preview']}\"")
     if files_vision_failed_skipped:
         print(f"    of which vision_failure_rate_too_high: {len(files_vision_failed_skipped)}")
         for vf in files_vision_failed_skipped:
