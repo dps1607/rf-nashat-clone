@@ -1,5 +1,7 @@
 # REPO_MAP — canonical doc locations
 
+> **Orientation note (added session 9):** Before reading any other doc in this map, read **`docs/STATE_OF_PLAY.md`** first. It is the authoritative current-state document as of 2026-04-13 (session 9 stabilization). It supersedes parts of this REPO_MAP, parts of `docs/ARCHITECTURE.md`, and the session 7 entry of `docs/HANDOVER.md`. Specifically: any claim in this map about local Chroma being primary, about the 584 reference-library chunks being "mystery" or "to be dropped," about Plans 1/2/3 from session 7, or about ADR_006's 48 marker boolean flags being on the critical path — those claims are **superseded**. STATE_OF_PLAY.md tells the truth about all of them.
+
 **Purpose:** Single source of truth for where docs live. Every session prompt should tell Claude to read this file FIRST, then the task-relevant docs it flags below. Paths are relative to repo root `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone`.
 
 **Rule:** If you move or rename a doc, update this file in the same commit. No exceptions.
@@ -26,6 +28,7 @@ Read before changing ingestion, retrieval, or collection schemas.
 - `docs/DECISIONS.md` — resolved decisions (incl. service-account path at ~/.config/gcloud/rf-service-account.json)
 - `docs/HANDOVER.md` — rolling handover log (most recent entries at top). Session 7 entry (2026-04-13) contains the full text of the three approved backfill plans (A4M migration, coaching Phase 1 structural, coaching Phase 2 marker detection) and the tech-lead mandate established this session.
 - `docs/NEXT_SESSION_PROMPT.md` — the bootstrap prompt for the next session. Refreshed each session-end.
+- `docs/STATE_OF_PLAY.md` — **created session 9 (2026-04-13)**. Authoritative current-state document. Read FIRST in any new session before reading any other doc in this map. Supersedes parts of REPO_MAP, ARCHITECTURE, and the session 7 HANDOVER entry. Captures: Railway-canonical truth, full breakdown of the 584 `rf_reference_library` chunks (NOT stale, NOT droppable), the actual minimum metadata-consistency gap (5 display fields against `rag_server/app.py:format_context()`, not 48 marker booleans), the parallel A4M ingestion lineages story, and the coaching collection word-count distribution as observation-only.
 - `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` — **created session 8**. Single source of truth for the current metadata shape of `rf_coaching_transcripts` chunks in local Chroma (post-2026-04-10 RFID wipe). Generated via read-only peek at 5 sample chunks. Required input for Plan 2 (Phase 1 structural backfill). Does not yet exist in session 7.
 - `docs/A4M_LEGACY_CHUNKS_INVENTORY.md` — **created session 8**. Read-only inventory of the 584 pre-ADR_006 A4M chunks in `rf_reference_library`. Verification step before the drop-and-re-ingest decision from session 7 is executed. Does not yet exist in session 7.
 

@@ -4,6 +4,58 @@ Deferred items with enough detail to resume cold. Pulled into context only when 
 
 ---
 
+## NEW — added session 9 (2026-04-13, stabilization)
+
+> **Note on the session 7 entries below:** All session 7 backlog items below were captured *before* the session 9 stabilization corrected the framing of the metadata work. Most session 7 items (Plan 1/2/3 execution, ADR_002 file-record backfill prerequisites, the 584-drop-and-re-ingest decision, BUILD_GUIDE §3G/§7 amendment, `markers_discussed` casing, Railway sync cadence as currently framed) are **superseded by `docs/STATE_OF_PLAY.md`**. They are not deleted because the *underlying ideas* may become valid later, but they should not drive next-session work without re-reading STATE_OF_PLAY first. Specifically:
+>
+> - **The 584-drop-and-re-ingest item below is REVERSED.** The 584 chunks are the live, well-built A4M reference library serving Dr. Nashat in production. They are not dropped under any circumstances.
+> - **Plans 1, 2, 3 below are FROZEN.** The "Phase 1 structural backfill" and "Phase 2 marker detection" reference 48 marker boolean flags that no consumer in `rag_server/app.py` reads.
+> - **The Railway sync cadence question below has a NEW DEFAULT.** Local is a development sandbox; Railway is canonical. The sync direction is local → Railway via tarball+bootstrap, on demand, when local has something worth shipping. There is no automatic sync. There is no large pending sync queue (because there is no large body of local-only changes to push).
+
+### Coaching collection chunk-size observation (NOT a known problem, NOT a planned fix)
+**Priority:** Observation only. No action without a real retrieval-quality trigger.
+
+**Finding (session 9 verification, read-only against local Chroma).** The live 9,224-chunk `rf_coaching_transcripts` collection has the following word-count distribution:
+
+- min: 30w, p10: 291w, **median: 564w**, p90: 652w, max: 2891w, mean: 573w
+- 267 chunks below 100w
+- 515 chunks at 100–249w
+- 7,915 chunks at 250–999w (the bulk)
+- 527 chunks at 1000w or larger
+
+**This is the production state of the v3 LLM chunker output, full stop.** It is NOT a known problem. It is NOT a deferred fix. The earlier draft of this backlog item framed it as "the same small-chunk problem `merge_small_chunks.py` was built to fix" — that framing was wrong and is corrected here.
+
+**Why the earlier framing was wrong, and why no hard floor should be applied to coaching content:**
+
+1. **`merge_small_chunks.py` was built for one specific corpus at one specific time.** It applied a `FLOOR=250` post-process pass to A4M lecture transcripts where Haiku had over-fragmented monologue content. That number was tactical, not principled. It is not a generally-applicable rule.
+2. **The v3 chunker's `<150w merge escape hatch` was also tactical.** It came from a prompt-engineering decision in `rag_pipeline_v3_llm.py` for coaching call Q&A. The number is not a quality threshold; it's a prompt parameter from one iteration. It should not be carried forward as a rule.
+3. **Q&A in fertility coaching is typically long-form.** Dr. Nashat walking through a lab result, explaining a protocol, or answering a multi-part question produces responses that are naturally hundreds of words long. A short chunk is much more likely to be a clean topic transition (one speaker's brief acknowledgment, a question handoff, a coaching moment) than to be over-fragmented content. **Forcing a numeric floor risks merging chunks that should stay separate** because they happen to fall below an arbitrary threshold.
+4. **The right rule is "whatever chunk size makes the chunk a coherent retrievable unit."** That's a per-chunk judgment, not a numeric threshold. The v3 chunker already makes that judgment via the LLM's topic-boundary detection. If specific chunks turn out to be bad, that's a per-chunk investigation, not a corpus-wide post-processing pass.
+
+**The actual question to ask, if and only if a real trigger surfaces:** when retrieval quality on coaching content shows a specific failure mode (e.g., "this query returned a 30-word chunk that was meaningless out of context, and a more useful chunk existed adjacent to it"), investigate that specific chunk and its neighbors. If they should be merged, merge them. If they shouldn't, leave them. There is no global fix here. There is no `merge_small_chunks.py`-style pass for coaching content, ever, because the framing that produced that script does not apply to this corpus.
+
+**Why this resolves the "session 14 / Q&A re-merge" memory:** there was never a coaching Q&A re-merge session, and there should not be one. The memory came from real signals — the v3 prompt rule about Q&A topic boundaries, and the A4M Module 14 rescue work — that got conflated in handover docs across low-context sessions. **A4M Module 14** required `merge_small_chunks.py` to recover usable chunks from an unusually fragmented source transcript. That fix was for A4M lecture content, applied pre-RAG, never written to Chroma. It does not generalize. The coaching collection is fine as-is.
+
+**The honest backlog status here is "no action item."** The observation is captured in `docs/STATE_OF_PLAY.md` for future sessions that might wonder what those word-count numbers look like, but the thing future sessions should NOT do is "fix" the distribution by running a merge pass.
+
+### Archive Lineage A artifacts to `data/_archive/`
+**Priority:** Low. Pure cleanup.
+
+**Scope:** Move `data/a4m_transcript_chunks_full.json`, `data/a4m_transcript_chunks_merged.json`, `data/a4m_transcript_chunks_pilot.json`, `ingest_a4m_transcripts.py`, and `merge_small_chunks.py` to `data/_archive/lineage_a_a4m_chunking_attempt/` (or similar). Add a README in that directory explaining what they are, why they exist, why they were never ingested, and why the 584-chunk Lineage B in `rf_reference_library` won. See `docs/STATE_OF_PLAY.md` "Two parallel A4M ingestion lineages" section for the full story.
+
+**Why not delete outright:** they're useful as a reference for how the v3 chunking pipeline was adapted for non-Q&A content, in case that pattern is ever needed for a future loader. They also document a real (and non-trivial) piece of session work that should not be lost from history.
+
+**When:** any small cleanup session, low priority. Do not block other work to do this.
+
+### Optional: M3 transcript speaker backfill
+**Priority:** Very low. Pure polish.
+
+**Scope:** 18 transcript chunks in M3 (Fertility Assessment Male) of the A4M reference library have `speaker: "Unknown"` while the corresponding slide chunks in M3 likely have a named lecturer in slide 1 of the deck. A targeted backfill script could read the M3 slide chunks, extract the lecturer name, and update the 18 transcript chunks. Total touched: 18 chunks. M5 and M10 are case study panels with intentional ambiguity and should not be touched.
+
+**Why low:** the impact is on citation rendering quality for one module out of 14. Small enough to leave for a polish pass once the UI thread is moving.
+
+---
+
 ## NEW — added session 7 (2026-04-13)
 
 ### ADR_002 file-record backfill plan (dedicated planning session)

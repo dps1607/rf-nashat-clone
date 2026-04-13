@@ -2,6 +2,51 @@
 
 Updated in place each session-end. Read this first to resume.
 
+> **Orientation note (added session 9):** The session 7 entry below is preserved as history. **It is no longer authoritative for next-session work.** For current state of the system and the actual next-session goal, read `docs/STATE_OF_PLAY.md` first. Then read this file's session 9 entry (immediately below) for the stabilization summary. Then read whatever older entries the current task actually needs — but do not re-derive Plan 1, Plan 2, or Plan 3 from session 7 without first reading STATE_OF_PLAY.md in full.
+
+---
+
+## 2026-04-13 (session 9) — Stabilization: corrected drift inherited from sessions 5–8
+
+**Status:** Stabilization session. No production code shipped, no Chroma writes, no git operations performed by Claude. Output is documentation: a corrected current-state doc (`docs/STATE_OF_PLAY.md`), a refreshed BACKLOG with session 9 entries superseding session 7's framing, a rewritten next-session prompt pointing session 10 at the folder-selection UI thread, and two read-only inventory scripts (`scripts/peek_coaching_schema.py`, `scripts/peek_reference_library.py`).
+
+**What this session corrected.** Sessions 5–8 expanded a real but small concern ("the A4M chunks I'm about to ingest don't have the same metadata shape as the coaching chunks already in the system") into a comprehensive universal chunk metadata contract (ADR_006), three written backfill plans (Plans 1/2/3), four cross-plan consistency decisions, and a session-8 execution prompt. Session 8 began executing those plans against local Chroma, hit Gate 1, and Dan interrupted with the observation that the plans didn't match what was actually deployed. Session 9 investigated and found multiple cascading drifts, all corrected in `docs/STATE_OF_PLAY.md`. Highlights:
+
+1. **Railway is canonical, not local.** The 2026-04-09 Phase 3.5 deploy uploaded a tarball of local Chroma to Railway via cloudflared quick tunnel. After that upload, Railway became the live data store serving Dr. Nashat and other early users. Local Chroma has not been kept in sync since 2026-04-09 and is a development sandbox. The session 7 framing of "local primary, Railway sync deferred" was inverted from reality.
+
+2. **The 584 chunks in `rf_reference_library` are the live A4M reference library, not stale.** They contain 263 transcripts + 269 slides + 52 summaries across 15 modules, with 5 named lecturers (Jaclyn Smeaton ND being the lead at 275 chunks) properly attributed across 513 of 584 chunks. The session 7 plan to "drop and re-ingest from `data/a4m_transcript_chunks_merged.json`" would have silently destroyed the 269 slide chunks and 52 summary chunks because they have no source-of-truth in that JSON. Plan 1 as written would have done real harm.
+
+3. **`data/a4m_transcript_chunks_*.json` and `merge_small_chunks.py` are dead code from an abandoned A4M ingestion attempt (Lineage A).** The 584 chunks in `rf_reference_library` came from a different, parallel ingestion attempt (Lineage B) that produced higher-quality chunks (median 716w vs Lineage A's 446w) and captured slides+summaries that Lineage A doesn't have. Lineage A artifacts should be archived (BACKLOG item) but not deleted.
+
+4. **There has never been a coaching Q&A re-merge, and there should not be one.** Earlier session memory referenced "the Q&A re-merge / session 14" — this was a conflation of two unrelated things: the v3 chunker's prompt rule about Q&A topic boundaries, and the A4M Module 14 rescue work that `merge_small_chunks.py` performed pre-RAG on lecture content. Neither generalizes to a coaching-collection merge pass. Per Dan's session 9 clarification: "that 150 word limit should not be there. it is whatever is right and appropriate. most q&a with this work are long responses." The right rule for chunk size is "whatever makes the chunk a coherent retrievable unit," which is a per-chunk LLM judgment, not a numeric floor. The coaching collection's word-count distribution is captured in STATE_OF_PLAY.md as observation only — no action item.
+
+5. **The actual minimum metadata-consistency gap is much smaller than ADR_006.** Read against `rag_server/app.py:format_context()`, the deployed retrieval code reads exactly four metadata fields: `topics` from coaching, `module_number` / `module_topic` / `speaker` from reference library. The "consistency gap" between the two collections is solved by a 5-field display normalization (~50 lines of Python in `format_context()`, zero Chroma writes), not by a 48-marker-flag universal contract. ADR_006's marker-flag schema becomes valuable when (and only when) the retrieval layer adds a feature that needs lab-marker filtering AND the regex-on-text approach turns out to be insufficient. Neither has happened.
+
+6. **Two parallel Claude sessions ran concurrently during session 9** (different chats, same working tree). The second session caught the first session's near-miss of overwriting good work the first session had already written. Both sessions independently produced overlapping investigations, both arrived at the same authoritative findings via different paths. The second session's additions (the parallel-lineages explanation, the coaching-distribution observation, the speaker-count refinement, the post-mortem update) are integrated into the single `docs/STATE_OF_PLAY.md` that landed.
+
+**What's NOT changed this session:**
+
+- ADR_002, ADR_005, ADR_006, ADR_002 addendum — all preserved as committed history. Not edited. They remain coherent design work that may become valid in their domains later.
+- The session 7 HANDOVER entry below — preserved verbatim as history. Demoted from "the roadmap" to "a body of design work that is not driving next-session work."
+- `data/`, `ingester/`, `admin_ui/`, `rag_server/`, `config/` — zero code touched.
+- ChromaDB (local or Railway) — zero writes.
+- Git — zero operations performed by Claude. Dan runs git.
+
+**Tech-lead mandate (carried forward, with one new addition).** Claude holds tech-lead role on the build. Tactical decisions are Claude's call; strategic decisions get flagged to Dan. The session 9 addition: **before reading any bootstrap prompt's reading list, independently verify the prompt's description of the world against the actual filesystem, git history, and deployed system.** If the prompt describes a world that doesn't match the evidence on disk, stop and surface the drift before doing anything else. Step 0 of `docs/NEXT_SESSION_PROMPT.md` implements this check explicitly. This addition exists because session 8 followed an inherited reading list that described a world that no longer matched reality, and the resulting work was about to do harm.
+
+**Files touched this session (writes only to docs/ and scripts/):**
+
+1. `docs/STATE_OF_PLAY.md` (NEW) — authoritative current-state doc, supersedes session 7 framing.
+2. `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` (NEW, session 8 carryover) — read-only inventory of coaching collection metadata shape.
+3. `docs/BACKLOG.md` (modified) — session 9 block at top with: coaching chunk-size observation as explicit "no action item," Lineage A artifact archival item, optional M3 speaker backfill. Session 7 entries preserved with a superseded note.
+4. `docs/NEXT_SESSION_PROMPT.md` (modified) — rewritten for session 10. Drives folder-selection UI end-to-end goal. Step 0 reality check is the new defensive rule.
+5. `docs/HANDOVER.md` (this entry, modified) — session 9 stabilization summary prepended; session 7 entry preserved below.
+6. `docs/REPO_MAP.md` (modified) — pointer to STATE_OF_PLAY.md added as authoritative orientation surface.
+7. `scripts/peek_coaching_schema.py` (NEW, session 8 carryover) — read-only schema inspector.
+8. `scripts/peek_reference_library.py` (NEW) — read-only inventory script for `rf_reference_library`.
+
+**Next session (session 10):** drive the folder-selection UI end-to-end with one real folder. Full bootstrap in `docs/NEXT_SESSION_PROMPT.md`. The metadata work from sessions 5–8 stays frozen; ADR_006 and Plans 1/2/3 stay in the repo as history but do not drive session 10 work.
+
 ---
 
 ## 2026-04-13 (session 7) — Three approved backfill plans + tech-lead mandate established

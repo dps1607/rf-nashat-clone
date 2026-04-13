@@ -1,0 +1,200 @@
+# STATE OF PLAY — corrected current-state document
+
+**Written:** 2026-04-13 (session 9, stabilization session)
+**Supersedes orientation in:** `docs/HANDOVER.md` session 7 entry, `docs/NEXT_SESSION_PROMPT.md`, large parts of `docs/REPO_MAP.md` and `docs/ARCHITECTURE.md` that describe local Chroma as primary
+**Earlier handover entries:** preserved as history; do not drive next-session work
+**Status:** Authoritative orientation surface for sessions 10+
+
+---
+
+## What we shipped and what it does
+
+There is a real, deployed product running at **https://console.drnashatlatib.com**, gated by Cloudflare Access, allowing two users (Dan and Dr. Nashat Latib) to log in via Google OAuth. It has been live since 2026-04-09.
+
+The deployed stack:
+- **Railway** project `diligent-tenderness`, service `rf-nashat-clone`
+- **Two gunicorn processes** managed by honcho (`Procfile.honcho`):
+  - `admin_ui/app.py` — public on the Cloudflare-fronted port; YAML config editor for `nashat_sales.yaml` and `nashat_coaching.yaml`, folder browser at `/admin/folders`, audit log viewer, inline test-query panel
+  - `rag_server/app.py` — localhost-bound (no external port); answers test queries by retrieving from ChromaDB and generating with Claude Sonnet
+- **ChromaDB on Railway's persistent volume** at `/data/chroma_db`, ~485 MB, two collections currently populated:
+  - `rf_coaching_transcripts` — 9,224 chunks of FKSP coaching call transcripts
+  - `rf_reference_library` — 584 chunks of A4M Fertility Certification course material (transcripts + slides + summaries) — see "What's actually in `rf_reference_library`" below
+- **Audit logging** to `/data/audit.jsonl` on the persistent volume
+- **Cloudflare Access** in front, doing JWT verification on every request via JWKS, allowlisting `dan@reimagined-health.com` and `znahealth@gmail.com`
+
+**What a user can do today:** log in, open one of the two agent YAML configs, edit it, save it (with hot-reload picked up by the rag_server), browse the Drive folder tree of the 12 connected Shared Drives, run a test query through the admin UI's inline test panel and see real cited chunks come back from `rf_coaching_transcripts` and `rf_reference_library`. The deployed product works end-to-end on the read path.
+
+**What a user cannot yet do:** drive the folder-selection UI through to an actual ingestion event. Folders can be browsed, but `data/selection_state.json` still contains placeholder data (`["abc", "def"]`) — no real folder has been assigned to a real library through the UI and run through an ingestion. The "save selections" button persists state, but no downstream ingestion trigger consumes that state.
+
+---
+
+## What's canonical where (the most important correction)
+
+**Railway is canonical for what users touch.** The 2026-04-09 Phase 3.5 deploy uploaded a tarball of local Chroma to Railway via cloudflared quick tunnel (the playbook is documented in `HANDOVER_PHASE3_COMPLETE.md` "How chroma_db was uploaded"). After that upload, Railway became the live, user-facing data store. Nashat and other early users interact with the Railway copy.
+
+**Local Chroma is a development sandbox.** It exists at `/Users/danielsmith/Claude - RF 2.0/chroma_db/`, contains the same data the April 9 tarball was built from (`rf_coaching_transcripts` 9,224 chunks + `rf_reference_library` 584 chunks), and is appropriate for: schema inspection, loader development, dry-runs of new ingestion logic, and any iterative work that should not touch what users are poking at. **Local has not been kept in sync with Railway since 2026-04-09** and should not be assumed to match production for anything other than the two collections that were uploaded.
+
+**The workflow when local needs to become canonical** (i.e., when you want a local change to land in production): tarball + bootstrap upload via cloudflared quick tunnel, same playbook as the April 9 deploy. This is reversible, well-documented, costs about 6 minutes of wall clock time, and is the explicit pattern the system was built to support. Do not invent a new sync mechanism unless there's a strong reason — and there is not currently a strong reason.
+
+**The framing in the session 7 HANDOVER and parts of REPO_MAP/ARCHITECTURE/HANDOVER_INTERNAL_EDUCATION_BUILD that describes "local primary, Railway sync deferred" is wrong.** That framing was inherited drift from low-context sessions and was not corrected before it shaped session 7's plans. It is corrected here. Do not re-derive Plan 1, Plan 2, or Plan 3 from the session 7 entry without re-reading this document first.
+
+---
+
+## What's actually in `rf_reference_library` (the 584 chunks)
+
+The April 9 handover flagged the 584 chunks in `rf_reference_library` as "unexpected" and "mystery" because they predated the recorded ingestion plan. **They are not a mystery. They are a deliberate, well-built, polished A4M Fertility Certification reference library, and they are part of the live system serving Dr. Nashat and other early users.** They are not stale. They must not be dropped without an extremely good reason and a verified replacement path.
+
+**Inventory** (captured 2026-04-13 via `scripts/peek_reference_library.py`):
+
+- **584 total chunks**, ~1.58M characters, ~395K rough tokens, mean 2,704 chars per chunk
+- **15 modules** of the A4M Fertility Certification course (modules 1 through 15)
+- **15 distinct module topics**, each cleanly named (Epigenetics & Nutrigenomics, Fertility Assessment Female, PCOS and Infertility, Recurrent Pregnancy Loss, The Reproductive Microbiome, etc.)
+- **5 named lecturers** with proper attribution across 513 of 584 chunks: Jaclyn Smeaton, ND (275 — the lead), Warner (90), Felice Gersh, MD (82), Espinosa (40), Uzzi Reiss, MD (26). The remaining **71 "Unknown"-speaker chunks** (36 transcripts + 27 slides + 8 summaries) are concentrated in **3 specific modules**: M3 (Fertility Assessment Male, 18 transcript), M5 (Case Study 1, 8 transcript), M10 (Case Study 2, 10 transcript). Modules 5 and 10 are *case study panels* where attribution is genuinely ambiguous; M3 likely has a lecturer name available in the slide deck but not propagated to transcripts. A targeted backfill for M3 would resolve the cleanest 18; the case study modules are intentional ambiguity.
+- **3 source types** per module (with light per-module variation):
+  - `transcript` — 263 chunks, raw transcribed lecture audio with `[HH:MM:SS]` timestamps and SPK_N speaker tags
+  - `slides` — 269 chunks, extracted slide deck content with `[Slide N]` markers and `start_slide` / `end_slide` / `total_slides` metadata
+  - `summary` — 52 chunks, distilled HTML/Google-Docs source material with inline `STUDY/STAT:` and `CLINICAL PEARL:` markers, accompanied by `has_clinical_pearl` and `has_study_reference` boolean quality flags
+- **One small gap:** Module 15 has only 2 slide chunks. Looks intentional (it's a fertility cases module) but worth knowing.
+
+**Metadata fields, all 100% populated across all 584 chunks:**
+`chunk_index`, `content_type`, `course`, `module_number`, `module_topic`, `source_file`, `source_type`, `speaker`, `word_count`
+
+**Metadata fields populated on subsets:**
+- `start_timestamp` / `end_timestamp` — 315/584 (transcripts + summaries)
+- `start_slide` / `end_slide` / `total_slides` — 269/584 (slides only)
+- `has_clinical_pearl` / `has_study_reference` — 52/584 (summaries only)
+
+**Chunk row ID format:** `a4m-m{module_number}-{source_type}-{NNN}` (e.g., `a4m-m10-transcript-001`, `a4m-m14-summary-002`, `a4m-m15-slides-001`). Stable, readable, deterministic.
+
+**Implication for the session 7 plans:** the Plan 1 + drop-and-re-ingest-the-584 plan from session 7 was built on the false premise that `data/a4m_transcript_chunks_merged.json` (353 chunks, transcripts only) was the source of truth and the 584 was stale. The reverse is true: the JSON is a stale intermediate from an earlier chunking pass; the 584 is the result of substantial follow-on work (slide extraction, summary enrichment, speaker attribution, quality flagging) that is not present in the JSON at all. **Executing Plan 1 as written would have silently destroyed the 269 slide chunks and 52 summary chunks** because they have no source-of-truth in the JSON. This was caught by the session 9 stabilization, not by the planning sessions.
+
+### Two parallel A4M ingestion lineages: which one won and why
+
+There are **two completely separate A4M ingestion attempts** in the repo, and only understanding both explains the metadata mess.
+
+**Lineage A — `ingest_a4m_transcripts.py` → `merge_small_chunks.py` → never-ingested JSON files.** Built 2026-04-12 (per HANDOVER.md "A4M full batch — COMPLETE" entry). `ingest_a4m_transcripts.py` adapted the v3 LLM-chunking pipeline (`rag_pipeline_v3_llm.py`, originally built for coaching Q&A calls) for A4M lecture content. Wrote `data/a4m_transcript_chunks_full.json` (452 chunks). The Q&A-tuned prompt produced sub-250w chunks on lecture content (the "small chunk" problem), so `merge_small_chunks.py` was written as a post-process pass that merges any chunk under 250w into its smaller neighbor, per-module, producing `data/a4m_transcript_chunks_merged.json` (353 chunks, mean 489w, min 252w). HANDOVER.md called this "the canonical file for ChromaDB ingestion." **It was never actually written to ChromaDB.** Module 14 of A4M required special handling in this lineage — the source transcript is unusually fragmented (17 words/block avg vs ~40 elsewhere) and the merge pass took it from 40 chunks at mean 181w down to 21 chunks at mean 345w. (**This is the "session 14 / merge chunks" memory you may carry forward.** The "14" refers to A4M Module 14, not session number 14, and the corpus is A4M lectures, not coaching Q&A. There has never been a coaching Q&A re-merge.)
+
+**Lineage B — direct ingestion into `rf_reference_library`.** Built by some earlier or concurrent session whose handover entries are not visible in the repo (the April 9 Phase 3 handover called the 584 chunks "unexpected" and "mystery"). This lineage produced **transcripts, slides, and summaries** — three source types per module — with a chunking pass tuned for lecture content from the start. Median transcript chunk is **716 words** (vs Lineage A's 446w median); only 7 of 263 transcript chunks are below 250w (vs Lineage A's source `_full.json` having 15 chunks below 100w that needed merging). Lineage B's chunking is **higher quality for lecture content** because it was tuned for that content type, and it captures slide and summary material that Lineage A doesn't even attempt.
+
+**The session 7 plans assumed Lineage A was canonical** because Lineage A's artifacts were visible in `data/` while Lineage B's were buried in ChromaDB and undocumented. **Lineage B is canonical** because it's the one that's actually serving Dr. Nashat in production. Lineage A's artifacts (`a4m_transcript_chunks_full.json`, `a4m_transcript_chunks_merged.json`, `a4m_transcript_chunks_pilot.json`, `ingest_a4m_transcripts.py`, `merge_small_chunks.py`) are **dead code from an abandoned attempt that nobody removed**. They should be archived to `data/_archive/` with a README explaining why, in a future small cleanup session. Do NOT delete them outright — they're useful as a reference for how the v3 chunking pipeline was adapted for non-Q&A content, in case that pattern is ever needed again.
+
+### Coaching collection word-count distribution (observation only, not a problem)
+
+For reference, the live 9,224-chunk `rf_coaching_transcripts` collection has the following word-count distribution (verified read-only against local Chroma, 2026-04-13):
+
+- min: 30w, p10: 291w, **median: 564w**, p90: 652w, max: 2891w, mean: 573w
+- 267 chunks below 100w
+- 515 chunks at 100–249w
+- 7,915 chunks at 250–999w (the bulk)
+- 527 chunks at 1000w or larger
+
+**This is the production state of v3 LLM chunking. It is not a known problem.** A previous draft of this section (and the original session 9 BACKLOG entry) framed it as "the same small-chunk problem `merge_small_chunks.py` was built to fix on A4M, never run on coaching." That framing was wrong and is corrected here.
+
+**Why no merge pass should be applied to this corpus:**
+
+1. `merge_small_chunks.py`'s `FLOOR=250` was tactical for A4M lecture content, not a generally-applicable rule.
+2. The v3 chunker's `<150w merge escape hatch` for Q&A boundaries was a prompt-engineering parameter, not a quality threshold.
+3. Q&A in fertility coaching is typically long-form (Dr. Nashat explaining lab results, walking through protocols). Short chunks are likely clean topic transitions or brief coaching moments, not over-fragmented content. Forcing a numeric floor would merge chunks that should stay separate.
+4. The right rule is "whatever chunk size makes the chunk a coherent retrievable unit," which is a per-chunk LLM judgment that the v3 chunker already makes.
+
+**If a real retrieval-quality failure surfaces** (e.g., "this query returned a 30-word chunk that was meaningless out of context"), investigate that specific chunk and decide what to do with it. There is no global fix. No corpus-wide merge pass. The "session 14 / Q&A re-merge" memory in earlier handover material was a conflation of two unrelated things — the v3 prompt rule for Q&A boundaries, and the A4M Module 14 rescue — neither of which generalizes to a coaching-collection merge pass.
+
+This observation is captured in BACKLOG.md as a "no action item" for the same reason: future sessions should know the distribution exists, and should know not to "fix" it.
+
+---
+
+## The actual goal (one paragraph)
+
+The folder-selection UI in `admin_ui/` lets a real user point at a folder in Google Drive, hit "ingest into library X," and have those chunks become queryable through the same agent that already serves coaching transcripts and the A4M reference library — with metadata consistent enough across sources that the agent can render coherent citations and the LLM can see provenance regardless of which collection a chunk came from. That is the single thing the system needs to do next that it cannot do today.
+
+---
+
+## The minimum bar for "metadata consistent enough"
+
+This is derived from reading `rag_server/app.py` directly, not from ADR_006.
+
+**The deployed retrieval code reads exactly four metadata fields from chunks** (see `format_context()` in `rag_server/app.py` around line 230):
+
+- From `rf_coaching_transcripts` chunks: `topics`
+- From `rf_reference_library` chunks: `module_number`, `module_topic`, `speaker`
+- (`text`, `distance`, and the source-collection name are universal and don't count as "metadata fields" in this sense)
+
+**The actual consistency gap, expressed against this consumer:** when the agent retrieves a coaching chunk and a reference chunk in the same response, the reference chunk gets a header like `Module 7: PCOS and Infertility — Presenter: Felice Gersh, MD` and the coaching chunk gets `Topics: Vitamin D|Insulin/Blood Sugar` with no provenance, no date, no speaker, no source identifier visible to the LLM. **The LLM literally cannot tell where a coaching exchange came from.** Citations on the response side suffer the same problem.
+
+**The minimum fix** is a small normalization that gives every chunk in every collection enough fields for the agent's `format_context()` to render a coherent header for it. Concrete shape:
+
+| Normalized field | A4M reference source | Coaching transcript source | New library source (template) |
+|---|---|---|---|
+| `display_source` | `module_topic` | derive from `call_file` (e.g., "FKSP Q&A 2024-02-14") | filename or library-defined display name |
+| `display_subheading` | `f"Module {module_number}"` | derive from `call_fksp_id` | section / chapter / page identifier |
+| `display_speaker` | `speaker` | scrub `coaches` to safe form (drop excluded names) or `null` | author / speaker if known |
+| `display_date` | `null` (A4M doesn't carry recording date) | parse from `call_file` if possible, else `null` | publication / capture date |
+| `display_topics` | `module_topic` (single string is fine) | existing `topics` value, optionally cleaned | comma- or pipe-separated list |
+
+Five normalized fields. None of them are boolean marker flags. None of them require a 48-flag universal contract. None of them require touching ADR_006. The fix can land as a small read-time helper in `rag_server/app.py` (zero Chroma writes) **or** as a write-time normalization at ingest time when new libraries land via the folder-selection UI (Chroma writes only on new ingestion, no backfill of existing collections required).
+
+**The read-time helper is the lower-risk first move** because it costs zero Chroma writes, requires no backup, runs against both local and Railway identically (it's a code change, not a data change), and any new loader that writes the normalized fields directly is automatically forward-compatible. Recommended sequence: (1) build the read-time helper, (2) verify both collections render coherent citations through the deployed agent, (3) make sure new loaders write the normalized fields at ingest time so future libraries don't need a backfill pass.
+
+---
+
+## The metadata-consistency gap, in detail
+
+For reference, here is the full field-level diff between the two collections that are actually in production. This is the actual "metadata consistency" problem you were trying to solve, sized correctly.
+
+| Concept | Coaching collection | A4M reference library | Aligned? |
+|---|---|---|---|
+| Chunk text | `documents` | `documents` | ✅ |
+| Filename / source identifier | `call_file` | `source_file` | different key name |
+| Sequence in source | parsed from row ID `CHUNK-{file_idx}-{chunk_idx}` | `chunk_index` (proper field) | different storage |
+| Time markers | `start_time` / `end_time` | `start_timestamp` / `end_timestamp` (transcripts); `start_slide` / `end_slide` (slides) | different key names; slides need a different concept entirely |
+| Tags / topics | `topics` (free-form pipe-delimited, no bookends) | `module_topic` (single string) | different shape |
+| Speaker | `coaches` (file-level, contains a guardrail-excluded name) | `speaker` (chunk-level, real lecturer names) | different shape; coaching's value is sensitive |
+| Content sub-type | (none — assumed coaching call) | `source_type` ∈ {transcript, slides, summary} | A4M has it, coaching doesn't |
+| Course / collection | (none) | `course` | A4M has it, coaching doesn't |
+| Word count | `word_count` | `word_count` | ✅ |
+
+**Eight misalignments. None are about the 48 marker boolean flags from ADR_006.** Every one is solvable by the small read-time normalizer described above, plus a ~5-field convention for new loaders to follow at write time.
+
+---
+
+## What's not the goal right now (deferred work, not deleted)
+
+The following are real ideas, captured in committed governing docs, **valid in their domains** but **not on the current critical path**. They stay where they are. They are not deleted. They are not driving next-session work.
+
+- **ADR_006 universal chunk schema** (48 marker boolean flags + 25 QPT flags + 11 universal required fields). A defensible design for a system that needs structured marker filtering at retrieval time. The deployed retrieval layer does not currently filter on marker flags, does not read `marker_*` fields, and does not consume any of ADR_006's universal fields beyond what the existing collections already provide. ADR_006 becomes valuable when (a) the retrieval layer adds a feature that needs lab-marker filtering, AND (b) the regex-on-text approach at query time turns out to be insufficient. Neither has happened. Both are speculative.
+- **Plans 1, 2, and 3 from session 7 HANDOVER.** Plan 1 (A4M migration to ADR_006) was built on the false premise above and would have destroyed real data; it is invalid as written. Plan 2 (rf_coaching_transcripts Phase 1 structural backfill) writes 11+48 fields to local Chroma that no consumer reads; it can be executed later if and when ADR_006 becomes load-bearing. Plan 3 (Phase 2 marker detection, LLM-assisted) is downstream of Plan 2 and inherits the same caveat.
+- **The 25 QPT flags forward-compat spec.** Same argument: speculative until the QPT-aware loader exists, and there's no QPT-aware loader on the roadmap right now.
+- **`markers_discussed` casing standardization, the cross-plan consistency decisions, the tech-lead mandate's "every loader must use the shared validator" enforcement clause.** These are coherent design ideas that presuppose Plan 2 has run. They become valid after Plan 2 runs, which itself is deferred.
+- **The 584-chunk drop-and-re-ingest decision from session 7.** Explicitly reversed. The 584 chunks are the live A4M reference library; they are not dropped under any circumstances without a verified replacement that includes the slide and summary content that the JSON does not contain.
+- **`VECTOR_DB_BUILD_GUIDE.md` §3G and §7 amendments.** Documentation alignment work. Not blocking anything user-facing.
+- **ADR_002 file-record backfill for historical corpora.** Same — documentation/registry work that's downstream of features the deployed product doesn't need yet.
+
+**To repeat: none of these are deleted.** The ADR documents stay in the repo as committed history. The session 7 HANDOVER entry stays intact. They are simply demoted from "the roadmap" to "a body of design work that may become valid later." The next-session work is driven by `STATE_OF_PLAY.md` (this document) and `NEXT_SESSION_PROMPT.md` (forthcoming).
+
+---
+
+## Honest post-mortem of the rabbit hole (for future sessions)
+
+Two paragraphs. Read these if you are a future Claude session about to read the session 7 HANDOVER and feel inspired by the tech-lead mandate and the three-plan structure.
+
+**What happened.** Between 2026-04-12 afternoon and 2026-04-13 morning, four sessions in a row (sessions 5, 6, 7, and the start of session 8) progressively expanded a real but small concern — "the A4M chunks I was about to ingest don't have the same metadata shape as the coaching chunks already in the system" — into a comprehensive universal chunk metadata contract (ADR_006), a same-day amendment to that ADR (replacing pipe-delimited markers with 48 boolean flags), a static-libraries ADR (ADR_005), an ADR_002 addendum for non-Drive file records, three written backfill plans (Plan 1 for A4M migration, Plan 2 for coaching Phase 1 structural backfill, Plan 3 for coaching Phase 2 marker detection), four cross-plan consistency decisions, a tech-lead mandate granting Claude tactical decision authority, and a session-8 execution prompt. Across all four sessions, **zero code shipped**, zero production state changed, and the actual deployed product (the folder-selection UI built in early-April sessions) sat with placeholder data in `selection_state.json` and a never-driven end-to-end ingestion path. None of the planning sessions verified their own premises against the actual deployed system, the actual contents of `rf_reference_library`, or the actual fields read by `rag_server/app.py`. Session 8's step 1 caught one small drift ("the wipe was empty-string, not key-removal") but did not catch the larger drift that the entire session 7 plan tree was operating on stale, partial, and partly-fictional information. Session 9's stabilization caught the larger drift, plus three additional ones uncovered while writing this document: (a) `data/a4m_transcript_chunks_merged.json` and friends are *Lineage A* of an abandoned A4M ingestion attempt, not the source of truth for the live `rf_reference_library`; (b) the live coaching collection has the same small-chunk distribution problem the A4M merge pass was built to fix, and the merge pass has never been run on it (see BACKLOG.md session 9 entry); (c) two parallel Claude sessions ran concurrently during session 9 against the same working tree, with the second session catching the first session's near-miss of overwriting the first session's good work — a second-order failure mode of the same trust-the-bootstrap-prompt pattern that produced sessions 5–8. The fix in both cases is the same: verify state before acting.
+
+**The pattern to recognize.** When a low-context session inherits a vague concern and a clean architectural framing, the architectural framing is intoxicating because every step within it produces visible, internally-consistent progress. Three sessions of ADR work all looked like progress. None of it was. The check that would have caught this at any point was: **"verify the bootstrap prompt's premises against the actual system before reading the prompt's reading list."** Specifically: read the actual deployed code that consumes the data the architecture is about; read the actual contents of the data the architecture proposes to migrate; check the actual git history for what was last shipping before the architecture work started. None of those checks take more than 10 minutes and any one of them would have caught the drift. The tech-lead mandate, as written in session 7, did not include this check. **It does now**, in the session-10 next-prompt: at session start, before reading the bootstrap prompt's reading list, independently verify that the bootstrap prompt's description of the world matches the evidence on disk. If it doesn't, stop and raise the drift before doing any other work.
+
+---
+
+## Files inventoried during session 9 (read-only, no Chroma writes)
+
+- `scripts/peek_coaching_schema.py` — created session 8, ran successfully against local Chroma, output captured in `docs/COACHING_CHUNK_CURRENT_SCHEMA.md`. Reusable.
+- `scripts/peek_reference_library.py` — created session 9, ran successfully against local Chroma. Output is the inventory section of this document. Reusable.
+- `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` — created session 8, captures the current shape of `rf_coaching_transcripts`. Still accurate. Note: a previous "post-wipe state" claim in session 7 HANDOVER described `client_rfids` and `client_names` as "wiped/cleared" — actual on-disk state is the values are the literal string `"[]"`, not absent. Documented in COACHING_CHUNK_CURRENT_SCHEMA.md.
+- `docs/STATE_OF_PLAY.md` — this document.
+- `docs/NEXT_SESSION_PROMPT.md` — to be rewritten in session 9 to point session 10 at the UI thread (see next session prompt for details).
+
+**No code outside `scripts/` was created or modified. No Chroma collection was written to. No git operations were run by Claude. No Railway operations were performed.**
+
+---
+
+## What the next session (session 10) should do
+
+See `docs/NEXT_SESSION_PROMPT.md` for the full bootstrap. Short version: drive the folder-selection UI end-to-end with one real folder, building the read-time normalizer for citation rendering as a side quest if and only if it surfaces as the actual blocker. The metadata work from sessions 5–8 stays frozen. ADR_006 and the three plans stay in the repo as history.
