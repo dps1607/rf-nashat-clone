@@ -235,3 +235,118 @@ After post-run inspection of the dry-run dump confirmed the lossy-export problem
 **Effect on the Supplement Info pilot:** of 4 files in the folder, only 1 (Professional Nutritionals FKP Schedule, 96% yield) would now ingest. 2 files skipped as low_yield, 1 skipped as unsupported_mime (spreadsheet).
 
 **Strategic note for session 11+:** The v1 loader is now intentionally conservative — it only ingests content that survives plain-text export. This means most image-heavy reference material in the Drive (which is much of it, given how Dr. Nashat builds visual handouts) is **un-ingestible by v1**. Building v2 is the natural next major piece of work. Until v2 lands, session 11 needs to either commit-run v1 against the small subset of text-heavy content, or skip ahead to v2.
+
+
+---
+
+## Session 14/15 amendment (2026-04-14) — Gap 1 CLOSED, Gap 2 OPEN
+
+**Written:** session 15 (2026-04-14), reflecting work shipped in session 14.
+
+### Gap 1 is CLOSED
+
+The gap that has driven this document since session 9 — *"the folder-selection
+UI persists state but no downstream ingestion trigger consumes that state"* —
+is closed as of session 14, commit `d33d6a9`.
+
+Full end-to-end roundtrip verified live:
+
+1. Admin UI folder picker → user assigns DFH virtual dispensary folder to
+   `rf_reference_library`, hits save
+2. `data/selection_state.json` written with the real folder ID
+3. `drive_loader_v2 --commit` reads `selection_state.json`, walks the folder,
+   exports HTML, runs Gemini vision OCR on embedded images (1 image, cache
+   miss → live call → cached), Layer B scrub fires once (1 name replacement
+   on the DFH landing page), chunks paragraph-aware, embeds via
+   `text-embedding-3-large`, writes 2 chunks to `rf_reference_library`
+4. `rf_reference_library` count: 595 → 597
+5. `rag_server /query` retrieves the 2 new chunks as top-ranked results for
+   a DFH-relevant query
+
+Real spend: ~$0.0004 total. No Railway writes. Run record at
+`data/ingest_runs/5fb763c8b9194f72.json`.
+
+### What also shipped in session 14 (carried in the same commit)
+
+These are not Gap 1 itself but they're load-bearing for what's coming:
+
+- **Folder-only enforcement** in admin UI (server save guard +
+  `folder-tree.js` hides file checkboxes). This encodes an explicit
+  decision that file-level selection is **not supported today** because
+  v2 is Google-Docs-only and exposing per-file selection would mislead
+  users about what's actually ingestible. The unlock is tied to v3
+  shipping — see Gap 2.
+- **Login cookie fix** (`ADMIN_DEV_INSECURE_COOKIES` env var) so localhost
+  HTTP development works.
+- **OpenAI live pre-flight** in `drive_loader_v2 --commit` — catches a
+  silent 401 before any file is processed.
+- **File-level dispatch plumbing** in `drive_loader_v2.run()` — forward-
+  compatible, dormant until v3 UI lands. No behavior change in v2.
+
+### Gap 2 — v3 multi-type loader
+
+Dan's standing requirement: **"all file types must eventually be selectable
+and ingestible."** v2 handles only Google Docs. v3 is the vehicle for
+everything else.
+
+**Definition of Gap 2:** the loader stack cannot ingest non-Google-Doc file
+types (PDF, images, sheets, slides, docx, plain text, audio/video) from
+Drive into any collection. The reference library on Drive is heavily
+image-and-PDF-based — most of Dr. Nashat's handouts and references are
+not Google Docs — so v2 reaches only a small subset of what's actually
+on Drive.
+
+**Closure proof for Gap 2** (same shape as Gap 1's proof): one PDF (or
+whichever pilot type Dan selects) ingested through the full pipeline,
+retrieved through `rag_server`, citations render correctly. Real spend
+captured. No Railway writes. Run record on disk.
+
+**Approach:** v3 is a **fresh module**, not modifications to v2. v2 stays
+Google-Docs-only and frozen. v3 is `ingester/loaders/drive_loader_v3.py`,
+designed in `docs/plans/2026-04-XX-drive-loader-v3.md` (session 15
+deliverable, design only, no v3 code this session). v3 is per-type
+dispatching: file MIME → handler module. Pilot type ships first as Gap
+2's closure proof; remaining types one or two per session after that.
+
+**Spans:** 3–5 sessions. Design = session 15. Pilot type implementation =
+session 16. File-level UI/server unlock pairs with v3 rollout (BACKLOG
+item #2).
+
+### Other gaps tracked under Gap 2's umbrella (from session 15 BACKLOG)
+
+These are real, but they're not the headline. They live in BACKLOG.md and
+get picked up alongside or after v3 work:
+
+- **Scrub retrofit for legacy collections** (`rf_coaching_transcripts`
+  9,224 chunks + first 584 `rf_reference_library` chunks). Real liability —
+  former-collaborator names may be present in pre-scrub chunk text.
+  Carried from session 13. Read-only count first, then approval, then
+  one-shot patch with backup. No re-embedding. (BACKLOG #3.)
+- **File-level selection UI + server unlock.** Plumbing already in v2
+  loader as of session 14; UI/server stay locked until v3 handles
+  non-doc types. (BACKLOG #2, pairs with Gap 2 implementation.)
+- **Admin UI save-toast feedback** + **selection state reset on save
+  failure.** Pure UX, ~15 min combined. (BACKLOG #4 + #5.)
+- **`/chat` endpoint 500** debug + **`test_login_dan.py` sys.path** shim.
+  Cleanup, ~10 min each, candidates for session 15 stretch. (BACKLOG
+  #6 + #7.)
+
+### What did NOT change
+
+- Railway production. Untouched. Still serving the 2026-04-09 deploy.
+- `rf_coaching_transcripts` (9,224 chunks). Untouched.
+- The legacy 584 `rf_reference_library` chunks. Untouched. (Scrub retrofit
+  is on backlog, not scheduled.)
+- ADR_006, Plans 1/2/3 from session 7, marker/QPT flag work. Still frozen.
+- The Lineage A archival cleanup task. Still on backlog, low priority.
+- The "no merge pass on coaching collection" decision. Still correct.
+- The session-9 honest post-mortem and the Step-0-verify-before-acting
+  rule. Still load-bearing — session 14 dirty-tree miss is a fresh
+  reminder.
+
+### Pointer to next-session prompt
+
+After session 15 closes: `docs/NEXT_SESSION_PROMPT.md` will be refreshed
+to point session 16 at the v3 pilot type implementation, using the v3
+design doc from session 15 as the spec. Until then, session 15's named
+work is governance catch-up + v3 design only.

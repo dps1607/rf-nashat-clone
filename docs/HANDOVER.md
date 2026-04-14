@@ -6,6 +6,265 @@ Updated in place each session-end. Read this first to resume.
 
 ---
 
+## Session 15 — 2026-04-14 — Governance catch-up + v3 design (no v3 code)
+
+**Goal (from NEXT_SESSION_PROMPT):** governance catch-up after session 14
+closed Gap 1. Not implementation work. Specifically: (1) add 7 named
+backlog items, (2) update STATE_OF_PLAY to mark Gap 1 CLOSED and
+introduce Gap 2, (3) write v3 multi-type loader design doc (halt at
+pilot-type section for Dan to pick), (4) stretch: fix `/chat` 500 +
+`test_login_dan.py` sys.path shim.
+
+**Outcome:** All 4 targets hit. Design doc is complete through session
+staircase. Pilot type locked to PDF. Two stretch items both resolved
+(one fixed, one closed as unreproducible). No v3 code written. No
+Chroma writes. No Railway writes. No git operations by Claude. Session
+spend: $0 interactive + 1 coaching `/chat` call for repro (Sonnet 4.6,
+~$0.01, well under gates).
+
+**Step 0 reality check:** all 12 gates green. Working tree clean, top
+commit `d33d6a9`, `rf_reference_library` count 597, 13 v2-ingested
+chunks with 3 showing `name_replacements ≥ 1`, Drive/Vertex/OpenAI all
+live, OCR cache at 28, scrub tests 19/19 + wiring PASS, v1 regression
+1 ingested + 2 low-yield skips, v2 regression 2 files / 2 chunks /
+$0.0002 / cache hit on DFH logo, Railway HTTP/2 302. No drift. The
+dirty-tree miss from session 14 did not recur — checked `git status`
+carefully per the updated Step 0 rule.
+
+### What shipped
+
+**Documentation:**
+
+- `docs/BACKLOG.md` — added 7 session-15 items at top under new dated
+  section:
+  1. v3 multi-type Drive loader (Gap 2), scope + anti-scope + 3–5
+     session span
+  2. File-level selection UI + server unlock (pairs with v3)
+  3. Scrub retrofit for legacy collections (carried from session 13;
+     upgraded to Medium-High based on session 15 coaching `/chat`
+     repro — see 6b below)
+  4. Admin UI save-toast feedback
+  5. UI selection state reset on save failure
+  6. `/chat` endpoint 500 debug → **closed this session**, could not
+     reproduce
+  6b. Scrub retrofit priority upgrade based on session 15 observation
+      (active liability visible at user-facing retrieval surface)
+  7. `test_login_dan.py` sys.path shim → **done this session**
+
+- `docs/STATE_OF_PLAY.md` — appended a session 14/15 amendment:
+  - Gap 1 marked CLOSED with full roundtrip evidence (595 → 597,
+    $0.0004, scrub fired once)
+  - Session 14's other shipped items noted (folder-only enforcement,
+    cookie fix, OpenAI pre-flight, file-level dispatch plumbing)
+  - Gap 2 introduced and defined (v3 multi-type loader, Dan's "all
+    file types" requirement quoted, closure proof shape specified)
+  - Other gaps tracked under Gap 2's umbrella
+  - "What did NOT change" section preserved (Railway, legacy
+    collections, ADR_006, etc.)
+
+- `docs/plans/2026-04-14-drive-loader-v3.md` — 738-line design doc,
+  design only, no v3 code this session:
+  - Why v3 exists (Dan's requirement quoted)
+  - Scope (DOES / does NOT)
+  - D1–D12 architectural decisions:
+    - D1: fresh module + `types/` subdirectory
+    - D2 (revised mid-session per Dan's question about architecture
+      stability): MIME dispatch with v2 Google Docs adapter for mixed
+      selections — v3 is the single admin-UI entry point, Google Docs
+      route internally to v2's existing `process_google_doc()`, unified
+      run records
+    - D3: shared `extract()` signature / `ExtractResult` dataclass
+    - D4: per-type extraction strategy table
+    - D5: per-type cost model with $1/$25 gate carryover
+    - D6: per-type scrub validation + mandatory
+      `test_scrub_v3_handlers.py` test file
+    - D7 (added mid-session per architecture review): citation
+      rendering for non-prose types — new `display_locator` and
+      `display_timestamp` optional fields with per-handler population
+      rules. Renderer stays dumb, handlers format their own locators.
+    - D8: file-level UI/server unlock gated to v3 pilot
+    - D9: `selection_state.json` schema unchanged
+    - D10: run records and dump-json carry forward
+    - D11: no eyeball gate
+    - D12 (added mid-session per architecture review): per-file
+      try/except + quarantine + `--retry-quarantine` flag + 50%
+      hard-fail threshold. Non-negotiable for stability at scale.
+  - End-to-end Gap 2 closure criterion (9 numbered points)
+  - Pilot type section with 5 candidates analyzed → **Dan picked
+    Option A (PDF)**
+  - Session staircase (PDF-scoped): session 16 deliverables (7 items),
+    session 17 conditional hardening pass, sessions 18–23+ tentative
+    handler ordering (image, docx, slides, sheets, plaintext, AV)
+  - Out-of-scope list
+  - Explicit "what session 15 is NOT doing" section
+
+**Code:**
+
+- `scripts/test_login_dan.py` — added `sys.path` shim computing repo
+  root from `__file__` and prepending to `sys.path` before the
+  `from admin_ui.auth import ...` line. Docstring updated to drop
+  `PYTHONPATH=.` from usage. Verified it imports and runs from a clean
+  env. (BACKLOG #7 closed.)
+
+**No code changes to:** v1 loader, v2 loader, admin_ui, rag_server,
+`_drive_common.py`, scrub module, any test file (other than
+`test_login_dan.py`).
+
+**No ChromaDB writes. No Railway operations. No git operations by
+Claude.**
+
+### Mid-session architecture review (Dan's question)
+
+After writing D1–D10 and halting for pilot-type pick, Dan asked whether
+this was the right architecture for stability and performance at
+build-out scale. The review surfaced three gaps in the design as
+originally drafted:
+
+1. **No per-file failure isolation.** v2 got away without it because
+   runs were small. v3 runs will hit 50+ files across multiple types,
+   where one bad PDF or a Gemini 429 could kill the whole run. Added
+   **D12 quarantine + retry flag** before starting session 16.
+
+2. **Citation rendering was under-specified for non-prose types.** The
+   session-9 5-field display normalization (source/subheading/speaker/
+   date/topics) works for lectures and coaching but doesn't cleanly
+   fit sheets (row ranges), slides (slide numbers), PDFs (page
+   numbers), or AV (timestamps). Each handler would have invented its
+   own shape, re-creating the Gap-1-era inconsistency in a new form.
+   Added **D7 with `display_locator` and `display_timestamp` optional
+   fields** and per-handler population table. Existing A4M and
+   coaching chunks unaffected — new fields are additive, renderer
+   elides when null.
+
+3. **Google-Docs-routes-to-v2 was wrong for the admin UI.** Original
+   D2 said v3 would skip Google Docs and force users to run v2
+   separately. Correct for CLI use, confusing for "one button" admin
+   UI use. **Revised D2** to have v3 call into v2's existing
+   `process_google_doc()` internally via a thin adapter, with unified
+   run records. v2 stays frozen as a standalone loader for direct CLI
+   users; v3 is the single entry point the admin UI invokes.
+
+Also noted but not added to D-list (governance/process, not architecture):
+
+- **Per-handler smoke tests in Step 0** of every session that has
+  v3 handlers built. Each handler ships with a known-good test file
+  and a scrub pattern assertion. Dependency upgrades (pdfplumber,
+  openpyxl, python-docx, python-pptx) can silently break a handler;
+  Step 0 should catch it before ingest work.
+
+### Stretch items
+
+**BACKLOG #7 — `test_login_dan.py` sys.path shim: DONE.** Standard
+`os.path`-computed-from-`__file__` shim. Verified it works from a
+clean env with `PYTHONPATH` unset. ~5 min of work as estimated.
+
+**BACKLOG #6 — `/chat` 500 debug: CLOSED, could not reproduce.**
+
+Session 14 saw a 500 with a "Claude API empty content" error on first
+test of `/chat` after closing Gap 1. Session 15 attempted reproduction
+on the same commit (`d33d6a9`, same Chroma, same `.env`):
+
+- **Sales agent** (`nashat_sales`, `public_default` mode, `rf_reference_library`
+  only): 2 test calls (one substantive DFH query, one `"test"`), both
+  HTTP 200 with well-formed Sonnet 4.6 responses + 5 cited chunks.
+- **Coaching agent** (`nashat_coaching`, `internal_full` mode, both
+  collections): 1 test call ("What do coaches typically recommend for
+  egg quality?"), HTTP 200, 8 chunks retrieved (5 coaching + 3
+  reference), full response.
+
+`call_claude()` in `rag_server/app.py` wraps the API call in try/except
+and returns error strings — a genuine 500 would have come from
+somewhere else in the handler (retrieve_for_mode or format_context on
+a code path not yet exercised).
+
+Closed BACKLOG #6 with a closure note specifying: if it recurs, capture
+the actual traceback from server stderr (not the HTTP body), the curl
+command, the loaded agent, and the loaded mode. Without those, the
+next investigation will hit the same dead end.
+
+### Session 15 observation — scrub retrofit liability is concrete
+
+The coaching-agent `/chat` test for BACKLOG #6 repro surfaced something
+worth escalating. The 5 coaching chunks returned by that single query
+contained:
+
+- `coaches: "Dr. Christina"` in metadata (multiple chunks)
+- `coaches: "Dr. Nashat + Dr. Christina"` in metadata (2 chunks)
+- Chunk text with `[Dr. Christina]` prefixing transcript speaker lines
+  (at least one chunk)
+
+The Sonnet 4.6 response correctly did not echo the former-collaborator
+name, but the raw chunk payload returned to the caller still contains
+them. This means BACKLOG #3 (scrub retrofit for legacy collections) is
+not a theoretical liability — it's active at the user-facing retrieval
+surface on every coaching query.
+
+**Added this as BACKLOG #6b**, raising the retrofit priority from
+Medium to Medium-High. Retrofit plan itself unchanged (read-only count,
+approval, one-shot in-place update, backup, no re-embedding — see
+BACKLOG #3). Just raising the urgency signal.
+
+**When:** next session after v3 pilot (session 16 or 17). Not session 15.
+
+### What this session did NOT do
+
+- Write any v3 code (`drive_loader_v3.py`, handlers, dispatcher) — as
+  planned
+- Modify v1 or v2 loaders — as planned
+- Run any ingestion — as planned
+- Write to any Chroma collection — as planned
+- Touch Railway — as planned
+- Build `test_scrub_v3_handlers.py` — it's a session 16 deliverable
+- Refresh `NEXT_SESSION_PROMPT.md` for session 16 — Dan does this
+  between sessions or session 16 does it as Step 1
+
+### Key lessons carried forward
+
+- **Session 14's "check `git status` carefully" rule worked.** Step 0
+  caught nothing because there was nothing to catch, but the careful
+  read was the right habit.
+- **Architecture review mid-design saved three D-items of drift.** Dan
+  asked the right question at the right time ("is this the right
+  architecture for stability at scale?") and three gaps surfaced that
+  would have bitten in sessions 17–20. Process note: tech-lead should
+  volunteer this review at the design-halt point in future
+  architecture sessions, not wait for Dan to ask.
+- **"Could not reproduce" is a valid closure state** as long as the
+  recovery path is documented. A permanently open bug with no
+  reproducer eats session budget every time a future session tries to
+  "finally fix it." Better to close with a "if it recurs, capture X Y
+  Z" note.
+- **`/chat` coaching test surfaced a real liability** that the theoretical
+  retrofit plan had underweighted. Repro tests are worth doing even when
+  they succeed — the 200s taught me something the 500 would not have.
+
+### Files modified
+
+- `docs/BACKLOG.md` — 7 items added, 2 updated with closure notes,
+  1 new item (6b) added mid-session
+- `docs/STATE_OF_PLAY.md` — session 14/15 amendment appended
+- `docs/plans/2026-04-14-drive-loader-v3.md` — NEW, 738 lines
+- `scripts/test_login_dan.py` — sys.path shim + docstring update
+- `docs/HANDOVER.md` — this entry (first writing in session)
+
+### Ready for Dan's end-of-session commit
+
+Suggested commit message:
+
+    session 15: governance catch-up + v3 design (PDF pilot)
+
+    - BACKLOG.md: add 7 items, close #6 (unreproducible) + #7 (done),
+      add #6b upgrading scrub retrofit priority
+    - STATE_OF_PLAY.md: Gap 1 CLOSED, Gap 2 introduced (v3 multi-type)
+    - docs/plans/2026-04-14-drive-loader-v3.md: NEW, D1-D12 decisions,
+      PDF pilot locked, session 16-23+ staircase
+    - scripts/test_login_dan.py: sys.path shim so it runs without
+      PYTHONPATH=.
+
+    No v3 code. No Chroma writes. No Railway ops. No v1/v2 changes.
+
+---
+
 ## Session 14 — 2026-04-13 — GAP 1 CLOSED: end-to-end UI → selection → ingest → retrieval
 
 **Scope shipped:** full end-to-end roundtrip from admin_ui folder picker through `data/selection_state.json` through v2 ingest through `rf_reference_library` through rag_server semantic retrieval, proved with a live query. **`rf_reference_library`: 595 → 597** (2 new chunks from `Designs for Health virtual dispensary`, run_id `5fb763c8b9194f72`). Real spend: ~$0.0004 total (vision $0.0002, embedding $0.0002). No Railway writes. No git operations by Claude.

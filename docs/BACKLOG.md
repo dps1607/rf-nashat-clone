@@ -4,6 +4,201 @@ Deferred items with enough detail to resume cold. Pulled into context only when 
 
 ---
 
+## NEW — added session 15 (2026-04-14, post-Gap-1)
+
+These 7 items are the wake of session 14 closing Gap 1. Captured here so the
+governance docs reflect them and future sessions can pick them up cold.
+
+### 1. v3 multi-type Drive loader (Gap 2)
+**Priority:** High. This is the named successor to Gap 1.
+
+**Scope:** Build a fresh `drive_loader_v3` module that handles non-Google-Docs
+file types: PDF, images, sheets, slides, docx, plain text, audio/video
+transcription. Per Dan's standing requirement, "all file types must
+eventually be selectable and ingestible." v3 is the vehicle.
+
+**Anti-scope:** Do NOT bolt new file types onto v2. v2 stays Google-Docs-only
+and frozen. v3 is a new module that lives next to v1 and v2 in
+`ingester/loaders/`.
+
+**Rough shape (full design in `docs/plans/2026-04-XX-drive-loader-v3.md`,
+session 15 deliverable):**
+- Per-type dispatcher: file MIME → handler module
+- Per-type extractors: pdfplumber/PyPDF, vision OCR fallback, openpyxl,
+  python-pptx, python-docx, Whisper or Gemini transcription
+- Per-type cost model (vision $, OCR $, Whisper $, embedding $/GB source)
+- Layer B scrub validation per type — does the existing scrub catch
+  collaborator names in each format, or does scrub need extensions?
+- File-level selection UI/server unlock (item #2 below) lands as part of
+  v3 rollout
+- Pilot type (TBD by Dan in design doc) ingested end-to-end as Gap 2
+  closure proof, same shape as Gap 1's DFH proof
+
+**Spans:** 3–5 sessions. Design = session 15. Pilot type implementation =
+session 16. Remaining types one or two per session after that.
+
+**Dependency:** none — v1, v2, scrub, admin UI all in place.
+
+### 2. File-level selection UI + server unlock
+**Priority:** High. Pairs with v3.
+
+**Context:** Session 14 added file-level dispatch plumbing inside
+`drive_loader_v2.run()` (forward-compatible, dormant). The admin UI and
+server save endpoint were locked to folder-only in the same commit
+because v2 is Google-Docs-only and exposing per-file selection over a
+folder-only loader would mislead Dan about what's ingestible.
+
+**Scope:**
+- `admin_ui/static/folder-tree.js`: re-introduce file checkboxes
+- `admin_ui/templates/folders.html`: render file rows
+- `admin_ui/app.py` `api_folders_save`: drop the folder-only guard, accept
+  arbitrary Drive IDs
+- `data/selection_state.json` schema: already supports file IDs (no
+  migration needed)
+
+**Anti-scope:** Don't unlock until v3 actually handles non-doc types, or
+the UI will let users select PDFs that silently get skipped.
+
+**When:** alongside v3 pilot in session 16.
+
+### 3. Scrub retrofit for legacy collections
+**Priority:** Medium. Real liability. Carried from session 13.
+
+**Scope:** Run `ingester/text/scrub.py` Layer B against all chunks in:
+- `rf_coaching_transcripts` (9,224 chunks)
+- `rf_reference_library` first 584 chunks (the pre-scrub A4M body)
+
+Both contain text from the pre-scrub era. Former-collaborator names
+(Dr. Christina Massinople / Mass / Massinople Park) may be present in
+chunk text and will surface in retrieval results to end users.
+
+**Implementation shape:**
+- Read-only first pass: count chunks where scrub would fire
+  (`name_replacements > 0` if applied)
+- Show Dan the count + sample chunks
+- If approved: write a one-shot retrofit script that updates chunk text
+  in place via Chroma `collection.update(ids=..., documents=...)`
+- Backup the affected collection before any writes (`tar.gz` of the
+  Chroma directory subtree)
+- Verify post-write with a second read-only pass: 0 chunks should match
+  the scrub patterns
+
+**Anti-scope:** No re-embedding. Embeddings don't shift on a name
+replacement that small. No re-chunking. Pure text patch.
+
+**When:** after v3 pilot lands. Not session 15.
+
+### 4. Admin UI "save selection" visual feedback
+**Priority:** Low. Pure UX.
+
+**Context:** Session 14 spent ~10 minutes confused about whether saves were
+going through because the save button blinks with no toast. Server response
+is correct; UI swallows it.
+
+**Scope:** Add a toast component (success/error variants) to
+`admin_ui/templates/folders.html` + a `showToast(msg, level)` helper in
+`admin_ui/static/folder-tree.js`. Wire it to the save endpoint's response
+handling.
+
+**When:** any cleanup session. ~15 min.
+
+### 5. UI selection state reset on save failure
+**Priority:** Low. Bug, but workaround exists.
+
+**Context:** When the server guard rejects a save (e.g., a non-folder ID
+slipped through to the folder-only endpoint), the JS keeps the stale
+selection in memory. The user clicks save again → re-sends the same
+rejected payload → loops. Workaround: page reload.
+
+**Scope:** In `folder-tree.js`, on a non-2xx save response, refetch
+`/api/folders` and rebuild the in-memory selection from the server's
+canonical state.
+
+**When:** alongside item #4. Same file, same trip.
+
+### 6. `/chat` endpoint 500 debug — CLOSED session 15, could not reproduce
+**Priority:** Closed. Reopen only with a captured traceback.
+
+**Context:** During session 14 verification I tried `/chat` for end-to-end
+RAG retrieval and got a 500 — Claude API error about empty content.
+Worked around by using `/query` directly.
+
+**Session 15 investigation:**
+- Reproduction attempted against commit `d33d6a9` (same state session 14
+  saw the 500 in)
+- Sales agent (`nashat_sales`, default mode, `rf_reference_library`
+  only): 2 calls, both returned HTTP 200 with well-formed Sonnet 4.6
+  responses and 5 cited chunks
+- Coaching agent (`nashat_coaching`, `internal_full` mode, both
+  collections): 1 call, HTTP 200, 8 chunks retrieved (5 coaching + 3
+  reference), full response
+- Read `call_claude()` in `rag_server/app.py`: wraps the API call in
+  try/except and returns error strings, so a genuine 500 would have
+  come from somewhere else in the handler (retrieve_for_mode or
+  format_context), not call_claude itself
+- Three possibilities named: transient Anthropic API issue during
+  session 14, a code path not exercised in session 15 (empty question,
+  malformed history, zero-chunk retrieval), or an environment drift
+  that self-healed
+
+**Closure:** No current reproducer. Endpoint demonstrably works on both
+agents across both collections on `d33d6a9`. Carrying an open bug with
+no reproducer eats session budget forever; better to close and reopen
+if it recurs.
+
+**If it recurs:** capture the actual traceback from the server stderr
+log (not the HTTP response body) and file a new backlog item with the
+traceback, the exact curl command, the loaded agent, and the loaded
+mode. Without those, the next investigation will hit the same dead
+end.
+
+### 6b. Scrub retrofit liability is now CONCRETE (upgraded from #3)
+**Priority:** Medium → raised to Medium-High based on session 15 observation.
+
+**Observation (session 15, via coaching agent `/chat` test):** A single
+`/chat` query against `internal_full` mode retrieved 5 coaching chunks,
+of which 4 contained former-collaborator references in either the
+`coaches` metadata field (`"Dr. Christina"`, `"Dr. Nashat + Dr. Christina"`,
+`"Dr. Nashat + Dr. Christina"`) or in the chunk text as speaker tags
+(`[Dr. Christina]` prefixing transcript lines).
+
+**Why this upgrades the priority:** BACKLOG #3 as originally written
+treated the retrofit as a general hygiene task. Session 15's reproducer
+shows the liability is **active at the user-facing surface** — every
+coaching query returns chunks with these references in the payload.
+The LLM response in the session 15 test correctly did not echo the
+former-collaborator name (Sonnet 4.6 handled it well), but the raw
+chunks returned to the caller still contain them, and nothing in the
+current pipeline prevents a future model (or a future prompt, or a
+future debugging session that logs chunks verbatim) from surfacing
+them.
+
+**No change to the retrofit plan** itself (see BACKLOG #3 above — read-only
+count first, approval, one-shot in-place update, backup, no re-embedding).
+Just raising the priority signal so it gets picked up sooner rather than
+after v3 ships.
+
+**When:** next session after v3 pilot (session 16 or 17), not session 15.
+
+### 7. `scripts/test_login_dan.py` `sys.path` shim — DONE session 15
+**Priority:** Closed.
+
+**Context:** Diagnostic script added in session 14. Required
+`PYTHONPATH=. ./venv/bin/python scripts/test_login_dan.py` to find
+`admin_ui`.
+
+**Fix (session 15):** Added an `os.path`-based sys.path shim at the top
+of the imports that prepends the repo root (computed from `__file__`)
+to `sys.path` before the `from admin_ui.auth import ...` line. Docstring
+updated to drop the `PYTHONPATH=.` prefix from the usage line. Verified
+the script imports cleanly from a clean environment and runs through
+to its auth check without import errors.
+
+**Commit:** lands in session 15 handover commit alongside the governance
+updates.
+
+---
+
 ## NEW — added session 9 (2026-04-13, stabilization)
 
 > **Note on the session 7 entries below:** All session 7 backlog items below were captured *before* the session 9 stabilization corrected the framing of the metadata work. Most session 7 items (Plan 1/2/3 execution, ADR_002 file-record backfill prerequisites, the 584-drop-and-re-ingest decision, BUILD_GUIDE §3G/§7 amendment, `markers_discussed` casing, Railway sync cadence as currently framed) are **superseded by `docs/STATE_OF_PLAY.md`**. They are not deleted because the *underlying ideas* may become valid later, but they should not drive next-session work without re-reading STATE_OF_PLAY first. Specifically:

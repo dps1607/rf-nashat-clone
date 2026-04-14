@@ -11,12 +11,21 @@ ADMIN_DEV_INSECURE_COOKIES env var for the fix.
 
 Usage:
   cd /path/to/rf-nashat-clone
-  PYTHONPATH=. ./venv/bin/python scripts/test_login_dan.py
+  ./venv/bin/python scripts/test_login_dan.py
 
 Kept for future login debugging. Generalize to arbitrary usernames if needed.
 """
 import getpass
+import os
 import sys
+
+# sys.path shim (session 15): let this script run without PYTHONPATH=.
+# Prepend the repo root (parent of scripts/) so `from admin_ui.auth import ...`
+# resolves when invoked as `./venv/bin/python scripts/test_login_dan.py`.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from admin_ui.auth import authenticate, _load_users
 
 users = _load_users()
