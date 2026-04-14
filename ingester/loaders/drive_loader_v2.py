@@ -30,7 +30,7 @@ Hard rules (same as v1 plus vision gates):
 from __future__ import annotations
 
 import argparse
-import html as html_module
+# (html as html_module: removed in session 17 - stitch_stream moved to google_doc_handler)
 import io
 import json
 import os
@@ -107,238 +107,19 @@ SKIPPED_FILES_LOG = _REPO_ROOT / "data" / "skipped_files_log.jsonl"
 # OCR cache on disk
 OCR_CACHE_DIR = _REPO_ROOT / "data" / "image_ocr_cache"
 
-# HTML tags whose text contents we skip entirely (metadata/styling)
-HTML_SKIP_TAGS = {"head", "style", "script", "meta", "link", "title"}
-
-
-# -----------------------------------------------------------------------------
-# HTML export + parsing
-# -----------------------------------------------------------------------------
-
-def export_html(client: DriveClient, file_id: str) -> bytes:
-    """Export a Google Doc as HTML. Returns raw bytes."""
-    request = client._service.files().export_media(
-        fileId=file_id, mimeType="text/html"
-    )
-    from googleapiclient.http import MediaIoBaseDownload
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return buf.getvalue()
-
-
-def resolve_image_bytes(client: DriveClient, src: str) -> tuple[bytes, str]:
-    """
-    Resolve an image src attribute from a Google Doc HTML export into
-    (bytes, mime_type).
-
-    Google Docs HTML export inlines images as base64 data URIs — this
-    is the common case and requires no network call. We handle that
-    path first. As a fallback for any doc that embeds an absolute URL,
-    we fetch via the DriveClient's authorized http session.
-
-    Raises RuntimeError on malformed data URIs or HTTP failures.
-    """
-    import base64
-
-    if src.startswith("data:"):
-        # Format: data:<mime>;base64,<payload>
-        try:
-            header, payload = src.split(",", 1)
-        except ValueError:
-            raise RuntimeError(f"Malformed data URI (no comma)")
-        # header is like "data:image/png;base64"
-        meta = header[5:]  # strip "data:"
-        if ";base64" in meta:
-            mime = meta.split(";base64")[0] or "image/png"
-            try:
-                img_bytes = base64.b64decode(payload)
-            except Exception as e:
-                raise RuntimeError(f"Base64 decode failed: {e}")
-        else:
-            # URL-encoded, rare for image exports but handle it
-            from urllib.parse import unquote_to_bytes
-            mime = meta or "image/png"
-            img_bytes = unquote_to_bytes(payload)
-        return img_bytes, mime
-
-    if src.startswith(("http://", "https://")):
-        http = client._service._http
-        resp, content = http.request(src, method="GET")
-        status = int(resp.get("status", 0))
-        if status != 200:
-            raise RuntimeError(f"Image fetch failed: HTTP {status}")
-        mime = resp.get("content-type", "image/png").split(";")[0].strip()
-        return content, mime
-
-    raise RuntimeError(f"Unsupported image src scheme: {src[:40]}")
-
-
-def walk_html_in_order(html_bytes: bytes) -> list[dict]:
-    """
-    Parse Google Doc HTML export and return an ordered stream of
-    {kind: 'text'|'image', ...} dicts, preserving document order.
-
-    BeautifulSoup walks the body in tree order; we emit text_with_paragraphs
-    and <img> tags as we encounter them.
-    """
-    from bs4 import BeautifulSoup, NavigableString
-
-    soup = BeautifulSoup(html_bytes, "html.parser")
-    body = soup.body or soup  # Docs exports always have a body, but be safe
-
-    stream: list[dict] = []
-
-    def recurse(node):
-        # Skip metadata/styling subtrees entirely
-        if hasattr(node, "name") and node.name in HTML_SKIP_TAGS:
-            return
-
-        # Handle <img> tag directly (do not recurse into children)
-        if hasattr(node, "name") and node.name == "img":
-            src = node.get("src", "")
-            alt = node.get("alt", "") or ""
-            if src:
-                stream.append({"kind": "image", "src": src, "alt": alt})
-            return
-
-        # For block-level containers that represent paragraphs in Docs
-        # HTML export (p, h1-h6, li), emit their combined text as one
-        # paragraph after recursing children. But we need to keep image
-        # order inside those blocks. Strategy: recurse children; any
-        # text collected via NavigableString along the way gets buffered
-        # per-block and flushed when the block closes.
-        if hasattr(node, "name") and node.name in {
-            "p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div", "td", "th",
-            "blockquote", "pre",
-        }:
-            # Extract direct text, but also walk children in order so
-            # images embedded inside the block appear at the right spot.
-            # We do a mini-walk that intersperses text and image stream entries.
-            text_buf: list[str] = []
-            for child in node.children:
-                if isinstance(child, NavigableString):
-                    s = str(child)
-                    if s.strip():
-                        text_buf.append(s)
-                elif hasattr(child, "name"):
-                    if child.name == "img":
-                        # Flush any buffered text as a paragraph first
-                        if text_buf:
-                            stream.append({
-                                "kind": "text",
-                                "text": " ".join(text_buf),
-                            })
-                            text_buf = []
-                        src = child.get("src", "")
-                        alt = child.get("alt", "") or ""
-                        if src:
-                            stream.append({"kind": "image", "src": src, "alt": alt})
-                    elif child.name in HTML_SKIP_TAGS:
-                        continue
-                    else:
-                        # Inline element — recurse, which may add its own stream entries
-                        # For inline text (span, a, b, i, etc.) we want the text inline,
-                        # not as a separate paragraph. Use get_text to collect, then
-                        # check for nested images.
-                        if child.find("img"):
-                            # Has nested images — flush buffer and recurse properly
-                            if text_buf:
-                                stream.append({
-                                    "kind": "text",
-                                    "text": " ".join(text_buf),
-                                })
-                                text_buf = []
-                            recurse(child)
-                        else:
-                            t = child.get_text()
-                            if t.strip():
-                                text_buf.append(t)
-            if text_buf:
-                stream.append({"kind": "text", "text": " ".join(text_buf)})
-            return
-
-        # Fallback: recurse into any other container
-        if hasattr(node, "children"):
-            for child in node.children:
-                if isinstance(child, NavigableString):
-                    s = str(child).strip()
-                    if s:
-                        stream.append({"kind": "text", "text": s})
-                elif hasattr(child, "name"):
-                    recurse(child)
-
-    recurse(body)
-    return stream
-
-
-def stitch_stream(
-    stream: list[dict],
-    vision_client: GeminiVisionClient,
-    drive_client: DriveClient,
-    use_cache: bool,
-) -> tuple[str, int, list[dict]]:
-    """
-    Walk the ordered stream, OCR images, and produce a single stitched
-    text string with [IMAGE #N: ...] markers inserted at image positions.
-
-    Returns (stitched_text, image_count, per_image_records).
-    `per_image_records` is for the dump-json inspection artifact.
-    """
-    parts: list[str] = []
-    image_count = 0
-    per_image: list[dict] = []
-
-    for entry in stream:
-        if entry["kind"] == "text":
-            txt = html_module.unescape(entry["text"])
-            if txt.strip():
-                parts.append(txt)
-        elif entry["kind"] == "image":
-            image_count += 1
-            src = entry["src"]
-            alt = entry.get("alt", "")
-            record = {
-                "index": image_count,
-                "src_prefix": src[:80],
-                "alt": alt,
-            }
-            try:
-                img_bytes, img_mime = resolve_image_bytes(drive_client, src)
-                record["byte_size"] = len(img_bytes)
-                record["mime_type"] = img_mime
-            except Exception as e:
-                reason = str(e)[:80]
-                record["download_failed"] = reason
-                parts.append(f"\n\n[IMAGE #{image_count}: DOWNLOAD_FAILED — {reason}]\n\n")
-                per_image.append(record)
-                continue
-
-            ocr = vision_client.ocr_image(img_bytes, img_mime, use_cache=use_cache)
-            record["sha256"] = ocr.sha256
-            record["is_decorative"] = ocr.is_decorative
-            record["failed"] = ocr.failed
-            record["ocr_text_preview"] = ocr.ocr_text[:200]
-            record["vision_input_tokens"] = ocr.vision_input_tokens
-            record["vision_output_tokens"] = ocr.vision_output_tokens
-
-            if ocr.is_decorative:
-                # Drop from stream entirely
-                pass
-            elif ocr.failed:
-                parts.append(
-                    f"\n\n[IMAGE #{image_count}: OCR_FAILED — {ocr.failure_reason}]\n\n"
-                )
-            else:
-                parts.append(
-                    f"\n\n[IMAGE #{image_count}: {ocr.ocr_text.strip()}]\n\n"
-                )
-            per_image.append(record)
-
-    stitched = "\n\n".join(parts)
-    return stitched, image_count, per_image
+# Session 17 (BACKLOG #11) - Google Doc HTML extraction helpers were
+# extracted into ingester.loaders.types.google_doc_handler so that v3's
+# dispatcher can route Google Docs through the same code path PDFs use.
+# v2 still uses these functions inside its own run() orchestrator below
+# via the extract_from_html_bytes() entrypoint, which preserves byte-
+# identical behavior to pre-session-17 v2 (emit_section_markers=False).
+from ingester.loaders.types.google_doc_handler import (
+    export_html,
+    resolve_image_bytes,
+    walk_html_in_order,
+    stitch_stream,
+    extract_from_html_bytes,
+)
 
 
 def count_image_words_in_chunk(chunk_text_str: str) -> int:
@@ -683,7 +464,12 @@ def run(
             print(f"      modified:     {modified}")
             print(f"      drive_size:   {drive_size:,} bytes")
 
-            # Export HTML
+            # Session 17 (BACKLOG #11): replaced the inline export_html /
+            # walk_html_in_order / stitch_stream sequence with a single call
+            # to google_doc_handler.extract_from_html_bytes. v2 still does
+            # the pre/post ledger snapshot for the per-file failure rate
+            # gate because that is orchestration policy, not extraction.
+            # emit_section_markers=False preserves byte-identical v2 behavior.
             try:
                 html_bytes = export_html(drive_client, file_id)
             except Exception as e:
@@ -691,27 +477,36 @@ def run(
                 continue
             print(f"      html_bytes:   {len(html_bytes):,}")
 
-            # Parse in document order
+            # Pre-extraction stream count for diagnostics. We re-walk the
+            # HTML in v2 mode just to get the text/image counts; cheap
+            # because no OCR happens during the walk itself.
             try:
-                stream = walk_html_in_order(html_bytes)
+                _diag_stream = walk_html_in_order(html_bytes, emit_section_markers=False)
             except Exception as e:
                 print(f"      ERROR parsing HTML: {e}", file=sys.stderr)
                 continue
-
-            text_count = sum(1 for e in stream if e["kind"] == "text")
-            img_count = sum(1 for e in stream if e["kind"] == "image")
+            text_count = sum(1 for e in _diag_stream if e["kind"] == "text")
+            img_count = sum(1 for e in _diag_stream if e["kind"] == "image")
             print(f"      stream:       {text_count} text blocks, {img_count} images")
 
             # Pre-spend projection for the file
             per_file_cost_est = project_vision_cost(img_count)
             print(f"      vision est:   ${per_file_cost_est:.4f} ({img_count} images)")
 
-            # OCR + stitch
+            # OCR + stitch - delegated to the shared handler. Pre/post
+            # ledger snapshot stays in v2 for the per-file failure-rate gate.
             pre_errors = len(vision_client.ledger.errors)
             pre_failed = vision_client.ledger.images_failed
-            stitched, actual_img_count, per_image_records = stitch_stream(
-                stream, vision_client, drive_client, use_cache=use_cache,
+            _v2_extract_result = extract_from_html_bytes(
+                html_bytes,
+                drive_client=drive_client,
+                vision_client=vision_client,
+                use_cache=use_cache,
+                emit_section_markers=False,  # v2 byte-identical contract
             )
+            stitched = _v2_extract_result.stitched_text
+            actual_img_count = _v2_extract_result.extra["image_count_in_stream"]
+            per_image_records = _v2_extract_result.extra["per_image_records"]
             post_failed = vision_client.ledger.images_failed
             file_failed = post_failed - pre_failed
             stitched_chars = len(stitched)

@@ -444,8 +444,8 @@ the new `requirements.txt` before committing.
 **Estimated effort:** ~1 hour with testing.
 
 
-### 11. Refactor v2 to expose `process_google_doc()` helper for v3 D2 adapter
-**Priority:** Medium-High. **Blocks** the "one-button mixed-folder" admin UI flow.
+### 11. ✅ RESOLVED in session 17 — refactor v2 to expose Google Doc helper for v3
+**Priority:** Closed.
 
 **Background:** Session 16's design doc D2 assumed v3 could `from
 ingester.loaders.drive_loader_v2 import process_google_doc` and use it
@@ -473,6 +473,39 @@ the collection. The user has to know which file types are supported.
 **Estimated effort:** dedicated session. ~3-4 hours including v2 regression test.
 
 ---
+
+**Closure (session 17):** Shipped via M3 design — extracted v2's inline Google Doc
+logic (export_html, resolve_image_bytes, walk_html_in_order, stitch_stream) into
+`ingester/loaders/types/google_doc_handler.py` as a single source of truth.
+v2's run() now imports these functions and calls a new `extract_from_html_bytes()`
+entrypoint with `emit_section_markers=False` (byte-identical contract). v3's
+dispatcher routes `v2_google_doc` MIME to the same handler with
+`emit_section_markers=True` (L3 design — emits [SECTION N] markers at h1-h6
+headings so display_locator can render as §N).
+
+**Closure proof:** end-to-end commit-run on `[RH] The Fertility-Smart Sugar Swap
+Guide` (file_id `1ucqhpCFg5fmj78XyU2yj0ANGM3kJuG7Tuut1jBd2Vrk`, in
+`//7. Lead Magnets/[RF] Sugar Swaps Guide`). 1 chunk written to
+`rf_reference_library` (604 → 605). Chunk has `source_pipeline=drive_loader_v3`,
+`v3_category=v2_google_doc`, `display_locator='§1'` (first real Google Doc with
+a § locator), `name_replacements=1` (scrub fired on real production content).
+End-to-end /chat smoke test against Sonnet 4.6 returned a grounded response
+with zero name leakage (6/6 safety checks PASS, see
+`scripts/test_chat_smoke_s17.py`). v2 dry-run regression byte-identical to
+session-16 baseline (verified twice — pre and post v3 dispatcher edit).
+
+**Verification environment:** Real Drive API + real OpenAI embeddings + real
+Vertex AI Gemini OCR (cache-only path on this run, no live calls) + real
+Anthropic Sonnet 4.6 + real local Chroma write. Same standard session 16 used
+to close Gap 2.
+
+**Files touched:** `ingester/loaders/types/google_doc_handler.py` (new, 492 lines),
+`ingester/loaders/drive_loader_v2.py` (1,105 → 900 lines, three surgical edits),
+`ingester/loaders/drive_loader_v3.py` (888 → 896 lines, dispatcher branch),
+`scripts/test_google_doc_handler_synthetic.py` (new, 9/9 PASS),
+`scripts/test_chat_smoke_s17.py` (new, 6/6 PASS). Backups at
+`.s17-backup` (v2, v3) and `.s17-pre-pilot` (selection_state.json).
+
 
 ### 12. `--retry-quarantine RUN_ID` CLI flag
 **Priority:** Low.
@@ -807,5 +840,146 @@ a unit test on synthetic data.
 file's preamble.
 
 **Estimated effort:** 5 min documentation. Real cost is the discipline.
+
+---
+
+## NEW — added session 17 (2026-04-14, post-#11-closure)
+
+These items are wake from session 17 (BACKLOG #11 closure). Captured here so
+future sessions can pick them up cold.
+
+### 29. Strip Canva and editor metadata from Google Doc extraction
+**Priority:** Medium. Pre-existing in v2; surfaced again by session 17 pilot.
+
+**Scope:** When v3's google_doc_handler extracts content from real lead-magnet
+Google Docs, the first ~120 chars are often editor metadata that has no value
+for retrieval and pollutes embeddings:
+
+  - Canva design edit URLs (`https://www.canva.com/design/.../edit?utm_content=...`)
+  - Production tags like `COVER:`, `PAGE 1:`, `HEADER:`, etc.
+  - Internal "draft notes," "editor notes," version stamps
+
+The Sugar Swaps Guide pilot in session 17 produced a chunk that starts:
+
+  "Canva design to edit: https://www.canva.com/design/DAGlfxX42jY/_WuqmWVxGC6rcZLnko8RCw/edit?utm_content=DAGlfxX42jY&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton / / COVER: / / The Fertili..."
+
+Same behavior exists in v2 on its 13 DFH chunks (session 14). Not blocking
+\#11 closure but it will degrade retrieval similarity scores for Google Doc
+content vs cleaner sources (PDFs, A4M).
+
+**Action:** add an editor-metadata stripper to `google_doc_handler` that runs
+during `stitch_stream` or as a post-pass on `stitched_text`. Strategy:
+
+1. Strip lines matching common Canva URL patterns (`canva\.com/design/[^\s]+`)
+2. Strip lines that are bare "production tags" — uppercase word followed by
+   colon at start of paragraph, no body content (`COVER:`, `PAGE 1:`,
+   `HEADER:`, `FOOTER:`, etc.)
+3. Strip standalone "draft" / "editor note" markers
+4. Be conservative — false positives that strip real content are worse than
+   leaving editor noise in.
+
+**A/B test required:** before-and-after comparison on the Sugar Swaps Guide
+chunk plus the 2 DFH Google Doc chunks. Verify retrieval similarity on a
+known-good query improves (or at least doesn't regress) after the strip.
+
+**Estimated effort:** ~1-2 hours including the A/B test on existing chunks.
+
+---
+
+### 30. v3 metadata writer drops `extraction_method` and `library_name`
+**Priority:** Medium. Observation; non-blocking but worth fixing during the
+retrofit bundle session (#18).
+
+**Scope:** Session 17 commit verification surfaced that v3-written chunks have
+`extraction_method=None` and `library_name=None` in their stored Chroma
+metadata, even though:
+
+  - `pdf_handler.extract` returns an `ExtractResult` with
+    `extraction_method='pdf_text'` or `'pdf_ocr_fallback'`
+  - `google_doc_handler.extract` returns
+    `extraction_method='google_doc_html_vision'`
+  - The selection state explicitly assigns `library_name='rf_reference_library'`
+    and the chunk DOES land in the right collection
+
+Same shape on session 16's PDF chunks — this is not a session 17 regression,
+it's a pre-existing v3 metadata writer bug where these two fields aren't
+propagated from the handler/dispatcher into the per-chunk metadata dict
+written via `collection.add`.
+
+**Where to look:** `drive_loader_v3.py` per-chunk metadata builder (search
+for the `metadatas.append` call inside the commit branch). The
+`extraction_method` should come from `extract_result.extraction_method` and
+`library_name` from the resolved selection assignment.
+
+**Why it matters:** `extraction_method` is used by per-type cost rollups
+(D5 from the v3 design doc) and the retrofit bundle's canonical
+`chunk_to_display(chunk)` helper (#18) will need `library_name` to render
+collection-aware citations. Both are dead-letter today.
+
+**Bundle with:** #18 (`format_context()` migration). Same retrofit session
+that touches the chunk metadata writers.
+
+**Estimated effort:** ~30 min including verification on existing v3 chunks.
+
+---
+
+### 31. `test_admin_save_endpoint_s16.py` clobbers `data/selection_state.json`
+**Priority:** Low. Side effect, not a bug per se.
+
+**Scope:** When `scripts/test_admin_save_endpoint_s16.py` runs, it ends with
+the line:
+
+    restored /Users/.../data/selection_state.json to session 16 working state
+
+The test has hardcoded restore logic that overwrites `data/selection_state.json`
+with a fixed session-16 shape (DFH folder + Egg Health Guide PDF) regardless
+of what was in the file before the test ran. Session 17 hit this when running
+the test battery after restoring `selection_state.json` to a different state —
+the test silently undid the restore.
+
+**Action:** either (a) make the test save the original file's contents in a
+`finally` block and restore them at exit, or (b) use a temp file for the test
+and never touch `data/selection_state.json`. Option (b) is cleaner.
+
+**Why low priority:** the hardcoded restore happens to match what most
+sessions want (session-16 working state), so the side effect is benign in
+practice. But it's a foot-gun for any session that's iterating on
+`selection_state.json` and runs the full test battery in between iterations.
+
+**Estimated effort:** ~15 min.
+
+---
+
+### 32. Smarter Google Doc locator detection (beyond h1-h6 headings)
+**Priority:** Low-Medium. Cosmetic — affects retrieval citation quality for
+Google Docs that don't use real heading tags.
+
+**Background:** Session 17's L3 design emits `[SECTION N]` markers at `<h1>`
+through `<h6>` tags so `derive_locator` can produce `§N` locators. This
+worked correctly on the Sugar Swaps Guide (which has real headings) but on
+the DFH virtual dispensary (which uses bold text as pseudo-headings) it
+produces an empty locator. The dispatcher correctly stores `display_locator=''`
+in that case, and `format_context()` handles empty locators gracefully — but
+the chunk is less citable than it could be.
+
+**Two paths:**
+
+(a) **Detect bold-text-as-pseudo-heading** by looking for `<strong>` or
+    `<b>` tags that are the only content of a `<p>` element and treating
+    them as section breaks. Riskier — Canva-styled Google Docs sometimes
+    bold random words for emphasis.
+
+(b) **Fall back to paragraph numbering** when no real headings are found.
+    Locator becomes something like `¶12` or `block 12`. Less semantic
+    but always populated.
+
+**Recommendation:** (b), as a fallback that only fires when the doc has zero
+`<h1>`-`<h6>` tags. Add a `PARA` marker unit to `types/__init__.py`
+`PAGE_MARKER_RE` and update `derive_locator` to render it as `¶N` /
+`¶¶N-M`.
+
+**Estimated effort:** ~2 hours including a synthetic test for the no-headings
+fallback path and a re-extraction (dry-run only, no Chroma writes) of the 2
+DFH chunks to verify they get fallback locators.
 
 ---

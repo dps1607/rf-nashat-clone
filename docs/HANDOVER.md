@@ -1530,3 +1530,179 @@ test_admin_save_endpoint_s16.py  16/16  ✓  NEW
 5. **Tech-lead volunteers architecture review at design halts.** Carried from session 15. Worked again in session 16 (M2/X/Q/A/R3/S3 decisions all flagged before code).
 6. **Halt before `--commit` and show dump-json.** Carried from session 14. Caught the metadata path bug in Step 7 before it landed in Chroma.
 
+
+---
+
+## Session 17 — BACKLOG #11 closure (Google Doc adapter via M3 extract-and-redirect) (2026-04-14)
+
+**Outcome:** BACKLOG #11 is closed. v3 drive loader now routes Google Docs to a shared `google_doc_handler` module via M3 design — the same code path v2 uses for its own `run()` orchestrator. Single source of truth. Byte-identical v2 behavior verified twice. End-to-end commit-run on a real lead-magnet Google Doc proves the full chain (Drive HTML export → handler stitching → Layer B scrub → chunking → embedding → Chroma write → retrieval → Sonnet generation) with zero name leakage. `rf_reference_library` count 604 → 605. Session spend ~$0.020 of $1.00 interactive budget.
+
+### What shipped
+
+**`ingester/loaders/types/google_doc_handler.py` (NEW, 492 lines):**
+- Owns `export_html`, `resolve_image_bytes`, `walk_html_in_order`, `stitch_stream` — extracted from `drive_loader_v2.py` per M3 design.
+- New entrypoint: `extract_from_html_bytes(html_bytes, *, drive_client, vision_client, use_cache=True, emit_section_markers=False) -> ExtractResult`
+- New entrypoint: `extract(drive_file, drive_client, config) -> ExtractResult` (v3 dispatcher signature, mirrors `pdf_handler.extract` shape)
+- L3 design: `emit_section_markers=False` (v2 default) → byte-identical to pre-session-17 v2. `emit_section_markers=True` (v3 default) → emits `[SECTION N]` markers at `<h1>`–`<h6>` headings so `derive_locator` produces `§N` locators.
+- Heading detection runs in `walk_html_in_order` as a single new branch that emits a `{kind: "heading", level, text}` stream entry at every h1–h6 BEFORE falling through to the existing block-level handler. The fall-through preserves v2's behavior of emitting heading text as a normal paragraph; the new branch only adds markers when L3 is enabled.
+- The marker format `[SECTION N]` matches `PAGE_MARKER_RE` in `types/__init__.py` (defined in session 16) so `derive_locator` consumes it without modification.
+- Returns `ExtractResult` with `extraction_method='google_doc_html_vision'`, `source_unit_label='section'` (when L3 is on, else None), `pages_total=0` (Google Docs have no pages), `units_total=<heading count>`, `images_seen`/`images_ocr_called`/`vision_cost_usd` populated from the shared vision ledger delta, and `extra={"per_image_records": [...], "image_count_in_stream": ..., "section_count": ...}` for v2's dump-json compat.
+
+**`scripts/test_google_doc_handler_synthetic.py` (NEW, 449 lines, 9/9 PASS):**
+- Mocks `DriveClient` and `GeminiVisionClient` so the test runs offline (no Drive, no Gemini, no Chroma writes)
+- Synthetic HTML fixture with h1 + 3×h2 + paragraphs + 1 base64 data-URI image + the former-collaborator name
+- Tests: imports + public interface, v2 mode (no SECTION markers, byte-identical to v2), v3 mode (4 SECTION markers in document order), section-marker regex compatibility with `PAGE_MARKER_RE`, scrub survival of `[SECTION N]` markers, ExtractResult shape in v3 mode, ExtractResult shape in v2 mode, end-to-end `chunk_with_locators` integration (chunks must be marker-free + scrub-clean + have `§` locators where applicable), no-images-no-headings simple doc edge case
+- All 9/9 PASS on first run. Notable: scrub fired 2 times on the synthetic fixture (both "Dr. Christina Massinople" and a separate "Dr. Christina" mention caught), `[SECTION N]` markers survived scrub intact, and `chunk_with_locators` produced `§§1-4` on the single-chunk synthetic doc.
+
+**`scripts/test_chat_smoke_s17.py` (NEW):**
+- Mirrors `test_chat_smoke_s16.py` (Egg Health Guide PDF closure proof) but asks about sugar/sweetener swaps to force retrieval of the new Google Doc chunk over the existing PDF and A4M chunks
+- Uses the rag_server Flask test client (no server lifecycle), `nashat_sales / public_default` mode
+- 6/6 safety checks PASS: no Christina, no Massinople, no Dr. Chris leaked, response non-empty, response grounded (mentions sugar/sweetener/swap/stevia/monk fruit/etc.), no ERROR prefix
+- Cost: ~$0.020 (1 Sonnet 4.6 call + retrieval embedding)
+
+**`ingester/loaders/drive_loader_v2.py` (MODIFIED, 1,105 → 900 lines, three surgical edits):**
+- Edit 1: removed unused `import html as html_module` (only used by the moved `stitch_stream`)
+- Edit 2: removed `HTML_SKIP_TAGS` constant + `export_html` + `resolve_image_bytes` + `walk_html_in_order` + `stitch_stream` definitions; replaced with imports from `google_doc_handler` (5 functions imported back, byte-identical use)
+- Edit 3: replaced the per-file `export_html` → `walk_html_in_order` → `stitch_stream` block in `run()` (~30 lines) with a call to `extract_from_html_bytes(emit_section_markers=False)` plus a small diagnostic re-walk of the HTML for the text/image counts (cheap, no OCR). Pre/post ledger snapshot pattern stays in v2 because it's orchestration policy, not extraction.
+- Backup at `drive_loader_v2.py.s17-backup`
+
+**`ingester/loaders/drive_loader_v3.py` (MODIFIED, 888 → 896 lines, one edit):**
+- Replaced the `if category == "v2_google_doc": raise HandlerNotAvailable(...)` stub with a real dispatch branch that imports `google_doc_handler`, builds the `_HandlerConfig` shim with `vision_client` + `use_cache=True`, and calls `google_doc_handler.extract(drive_file, drive_client, cfg)`. Mirror image of the existing PDF branch.
+- `SESSION_16_CATEGORIES = {"pdf", "v2_google_doc"}` already permitted the category — the gate didn't need a rename, just the dispatch implementation.
+- Backup at `drive_loader_v3.py.s17-backup`
+
+### M3 design crossing the v2-modification rule
+
+Session 14 established a hard rule: "no v1/v2/common modifications without explicit reason. v3 is a fresh module." Session 17 deliberately crossed this rule for the M3 extract-and-redirect pattern. The justification is:
+
+1. **Byte-identical contract.** v2 calls `extract_from_html_bytes(emit_section_markers=False)`, which preserves the exact same stream walking, image OCR, and stitching behavior as the pre-session-17 inline code. The only difference is where the function definitions live.
+2. **Verified twice.** v2 dry-run regression run before AND after the v3 dispatcher edit. Both byte-identical to the session-16 baseline:
+   - 2 files seen, 2 ingested, 0 skipped
+   - 2 chunks total, ~1,303 estimated tokens, $0.0002 estimated cost
+   - vision ledger: 1 images_seen, 0 ocr_called, 1 cache_hit, 0 failures
+   - Chunk 0 preview: `"URL: https://www.designsforhealth.com/u/reimaginedhealth [IMAGE #1: REIMAGINED HEALTH by Dr. Nashat Latib] ABOUT As ..."` — the post-scrub `Dr. Nashat Latib` substitution is present, confirming scrub still fires through the moved code path
+3. **Backups on disk.** `drive_loader_v2.py.s17-backup` and `drive_loader_v3.py.s17-backup` allow trivial rollback.
+4. **Tech-lead recommended M2** (copy-and-diverge) at the Step 1.5 design halt; Dan picked M3 explicitly. The crossing was approved before any code was written.
+
+**Modified rule (carried forward to session 18+):** v2 is still frozen UNLESS the change is an extract-and-redirect to a shared module that preserves byte-identical v2 behavior, verified by dry-run regression. Anything else still needs explicit approval.
+
+### The Sugar Swaps Guide commit (BACKLOG #11 closure proof)
+
+**Pilot file selection:** the original DFH virtual dispensary folder was rejected as a poor pilot because v2 had already ingested those Google Docs in session 14 (chunk-id collision risk on commit, plus the DFH content has no real `<h1>`–`<h6>` headings so L3 wouldn't have anything to demonstrate). Dan instructed: "find another lead magnet small." Searched the local folder-walk manifest (`folder_walk_20260412_153931.json`) for Google Docs in the marketing drive scored against lead-magnet keywords. Picked `[RH] The Fertility-Smart Sugar Swap Guide` (file_id `1ucqhpCFg5fmj78XyU2yj0ANGM3kJuG7Tuut1jBd2Vrk`, 6,544 bytes Drive size) in folder `//7. Lead Magnets/[RF] Sugar Swaps Guide` (folder_id `1sXOFoysJN0Pkv5rz9MJ0tDL6gWNnirgp`, drive_slug `3-marketing`).
+
+**Selection state:** rewrote `data/selection_state.json` to a single-file selection (no folder walk) targeting just the Sugar Swaps Guide → `rf_reference_library`. Backup at `data/selection_state.json.s17-pre-pilot`.
+
+**Dry-run result:** clean — 1 file enumerated, 1 processed OK, 0 quarantined, 0 deferred, 1 chunk projected, 569 words, ~983 tokens, $0.000128 projected spend. Handler: `v2_google_doc` → `extraction_method='google_doc_html_vision'`. The dump-json's sample chunk showed `display_locator: '§1'` and `name_replacements: 1` — the L3 markers worked AND scrub fired on the real production content.
+
+**Commit run:** `ingest_run_id=cf63f977f51d4d43`. OpenAI preflight passed. Drive enumeration + extraction completed cleanly. Wrote 1 chunk to `rf_reference_library` at chunk_id `drive:3-marketing:1ucqhpCFg5fmj78XyU2yj0ANGM3kJuG7Tuut1jBd2Vrk:0000`. Count delta: 604 → 605. Run record at `data/ingest_runs/cf63f977f51d4d43.json`.
+
+**9-point closure verification (all PASS):**
+1. ✓ Count delta = +1 (604 → 605)
+2. ✓ `v3_category='v2_google_doc'`
+3. ✓ `source_pipeline='drive_loader_v3'`
+4. ✓ Chunk tied to file_id
+5. ✓ `source_drive_slug='3-marketing'`
+6. ✓ `display_locator='§1'` — first real Google Doc with a § locator from L3
+7. ✓ `name_replacements=1` — scrub fired on real production content (Sugar Swaps Guide contains the former-collaborator name once)
+8. ✓ Stored chunk text contains zero leaked names (`Christina`/`Massinople`/`Dr. Chris` all absent via substring check)
+9. ✓ Query for "fertility-smart sugar swaps natural sweeteners" returns it as top result (dist 0.36, beating Egg Health Guide chunks and A4M slides)
+
+**End-to-end /chat smoke test (`test_chat_smoke_s17.py`):**
+- Question: "What sugar substitutes or natural sweeteners are best when I'm trying to optimize fertility? I want to cut sugar but still enjoy something sweet."
+- Mode: `nashat_sales / public_default`, 5 chunks retrieved
+- Response was grounded in Sugar Swaps Guide content: monk fruit (named "top pick"), stevia, dates, raw honey, maple syrup, avoid aspartame/sucralose, the avocado cacao mousse and coconut flour mug cake examples — all specific to the actual guide content, not general knowledge
+- 6/6 safety checks PASS: zero "Christina", zero "Massinople", zero "Dr. Chris" leakage anywhere in the output
+- Response includes a brand-appropriate FKSP CTA at the end
+- Cost: ~$0.020
+
+This is the full BACKLOG #11 + scrub integration proven on real data, on the real stack: Google Doc HTML export → shared handler extracted scrubbed → retrieval served scrubbed → Sonnet read scrubbed context → response contains no leaked name. Same standard session 16 used to close Gap 2.
+
+### Findings worth flagging
+
+**Finding 1 — Canva editor metadata pollutes Google Doc chunks.** The Sugar Swaps Guide chunk's first ~120 chars are: `"Canva design to edit: https://www.canva.com/design/DAGlfxX42jY/_WuqmWVxGC6rcZLnko8RCw/edit?utm_content=...&utm_source=sharebutton / / COVER: / / The Fertili..."`. Same pre-existing v2 behavior on the 13 DFH chunks. Filed as BACKLOG #29 (strip Canva and editor metadata). Dan flagged this explicitly during session 17.
+
+**Finding 2 — v3 metadata writer drops `extraction_method` and `library_name`.** Both fields show as `None` on the committed Sugar Swaps chunk in Chroma, even though the dataclass populated them and the chunk landed in the right collection. Same shape on session 16's PDF chunks. Pre-existing v3 metadata writer bug, not a session 17 regression. Filed as BACKLOG #30 (bundle with #18 `format_context()` migration).
+
+**Finding 3 — DFH Google Docs have no real headings.** During the earlier 3-file dry-run (DFH folder + Egg Health Guide PDF), both DFH Google Doc chunks came back with `display_locator=''` because their HTML uses bold-text-as-pseudo-heading instead of `<h1>`–`<h6>` tags. The Sugar Swaps Guide DOES use real headings, hence `§1`. L3 is working as designed; the issue is real-world Google Docs vary. Filed as BACKLOG #32 (smarter Google Doc locator detection with paragraph fallback).
+
+**Finding 4 — `test_admin_save_endpoint_s16.py` clobbers `data/selection_state.json`.** The test has hardcoded restore logic that overwrites the file with a fixed session-16 shape regardless of what was in it. Discovered when running the test battery during session 17 doc-update prep. Filed as BACKLOG #31.
+
+**Plus an architectural observation:** `resolve_image_bytes()` in the new handler still reaches into `drive_client._service._http` (a private attribute) for the HTTP-URL fallback path, same as v2 always did. If `DriveClient`'s internals ever change, both v2 and the new handler break. Not blocking, not filed as its own item — DriveClient hasn't changed in months and this is a minor footgun, not a real liability.
+
+### Files created (session 17)
+
+```
+ingester/loaders/types/google_doc_handler.py    492 lines  [new module]
+scripts/test_google_doc_handler_synthetic.py    449 lines  [new test, 9/9 PASS]
+scripts/test_chat_smoke_s17.py                            [new closure smoke, 6/6 PASS]
+data/selection_state.json.s17-pre-pilot                   [pre-pilot backup]
+data/ingest_runs/cf63f977f51d4d43.json                    [commit run record]
+ingester/loaders/drive_loader_v2.py.s17-backup            [pre-edit backup, 1,105 lines]
+ingester/loaders/drive_loader_v3.py.s17-backup            [pre-edit backup, 888 lines]
+```
+
+### Files modified (session 17)
+
+```
+ingester/loaders/drive_loader_v2.py      1,105 → 900 lines (M3 extract-and-redirect)
+ingester/loaders/drive_loader_v3.py        888 → 896 lines (dispatcher branch for v2_google_doc)
+data/selection_state.json                  swapped to single-file pilot, restored to session-16 shape post-commit
+docs/HANDOVER.md                           this entry
+docs/BACKLOG.md                            #11 closed; #29, #30, #31, #32 added
+docs/STATE_OF_PLAY.md                      session 17 amendment appended
+docs/NEXT_SESSION_PROMPT.md                refreshed for session 18
+```
+
+### Test suite state (all green)
+
+```
+test_scrub_s13.py                       19/19  ✓  (Layer B scrub — pre-existing)
+test_scrub_wiring_s13.py                PASS  ✓  (scrub wired into ingest pipeline — pre-existing)
+test_types_module.py                    12/12  ✓  (session 16)
+test_chunk_with_locators.py             PASS  ✓  (session 16)
+test_scrub_v3_handlers.py               2/2   ✓  (session 16, synthetic PDF, OCR fallback)
+test_format_context_s16.py              23/23  ✓  (session 16)
+test_admin_save_endpoint_s16.py         16/16  ✓  (session 16)
+test_google_doc_handler_synthetic.py    9/9   ✓  NEW (session 17)
+test_chat_smoke_s17.py                  6/6   ✓  NEW (session 17 closure smoke)
+```
+
+### Chroma state at end of session 17
+
+- `rf_reference_library`: **605 chunks** (604 baseline + 1 Sugar Swaps Guide v3 Google Doc)
+  - 584 pre-scrub A4M chunks (still NOT retrofitted, BACKLOG #6b)
+  - 13 v2 DFH chunks (post-scrub)
+  - 7 v3 PDF chunks (post-scrub, with page-range locators)
+  - **1 v3 Google Doc chunk (NEW, post-scrub, with section locator §1)**
+- `rf_coaching_transcripts`: 9,224 chunks (unchanged, pre-scrub — BACKLOG #6b)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache (`data/image_ocr_cache/`): 29 files (unchanged from session 16 — Sugar Swaps Guide had zero images so no OCR calls)
+
+### Session 17 spend
+
+| Event | Cost |
+|---|---|
+| 2× v3 dry-runs (3-file mixed + 1-file Sugar Swaps) | $0 |
+| Step 6 commit (1 chunk embedded) | $0.0001 |
+| Step 7 /chat smoke (1 Sonnet 4.6 call + retrieval embedding) | ~$0.020 |
+| **Total** | **~$0.020** of $1.00 budget |
+
+### Lessons carried forward to session 18
+
+1. **M3 extract-and-redirect is a viable pattern when v2 needs to share code with v3.** Single source of truth, byte-identical v2 behavior, verified by dry-run regression. Future v3 handlers should follow this pattern if they need to share code with v2 (which they shouldn't, because v2 is frozen — but the precedent is here).
+2. **Always verify pilot file has the structural feature being tested.** The DFH docs were a poor first pick because they have no real headings, so L3's `[SECTION N]` markers had nothing to demonstrate. The Sugar Swaps Guide pick (after Dan pushed back) was correct because it has real h1/h2 tags. Lesson: when piloting a new feature, scan for real-world examples that exercise the feature, not just any example that's small.
+3. **Heredoc + Python triple-quote strings + bash escaping is fragile.** Three times during session 17 a heredoc with Python code containing nested quotes failed to parse. Workaround: write the script to a file via `cat > /tmp/...` first, then `./venv/bin/python /tmp/...`. Future sessions: prefer this two-step pattern over inline heredocs for any Python script longer than ~10 lines.
+4. **`test_admin_save_endpoint_s16.py` has a side effect.** It overwrites `data/selection_state.json` with a fixed session-16 shape. Filed as BACKLOG #31. Until fixed, future sessions should restore `selection_state.json` AFTER running the test battery, not before.
+5. **The v3 metadata writer drops fields silently.** Both `extraction_method` and `library_name` show as `None` in stored Chroma metadata. Filed as BACKLOG #30. Bundles with #18.
+
+### What's actionable for next session
+
+See `docs/NEXT_SESSION_PROMPT.md` for the full session 18 bootstrap. Top candidates:
+
+1. **The retrofit bundle** (BACKLOG #6b + #17 + #18 + #20 + #30) — still the single biggest leverage point. Now joined by #30 (v3 metadata writer fields) which bundles naturally with #18.
+2. **Another v3 handler** — natural next file types per the existing `MIME_CATEGORY` table: docx, plain text, sheets, slides, image, av — in roughly that priority order.
+3. **BACKLOG #29** (Canva editor metadata strip) — small, focused, content-quality win that affects both v2 and v3 Google Doc chunks. ~1-2 hours.
+4. **BACKLOG #21** (folder-selection UI redesign) — biggest UX friction point per session 16. ~60-90 min.
+
+Dan picks at the start of session 18.
+

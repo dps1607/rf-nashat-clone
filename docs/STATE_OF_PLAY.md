@@ -416,3 +416,119 @@ The retrofit bundle is the single biggest leverage point: BACKLOG #6b (coaching 
 
 Alternative: BACKLOG #11 (refactor v2 to expose `process_google_doc()` for v3 D2 adapter) unblocks the "one-button mixed-folder ingest" UX. Single dedicated session. Decision is Dan's at the start of session 17.
 
+---
+
+## Session 17 amendment (2026-04-14)
+
+### What changed
+
+**BACKLOG #11 closed.** v3 drive loader now routes Google Docs to a shared
+`google_doc_handler` module via M3 design — same code path v2 uses for its
+own `run()` orchestrator. Single source of truth, byte-identical v2
+behavior verified twice via dry-run regression. The "one-button mixed-folder
+ingest" promise that #11 was supposed to unlock now works end-to-end:
+v3's dispatcher routes PDFs and Google Docs through the same run, and the
+admin UI's mixed folder/file selection actually ingests both types in one
+commit.
+
+**`rf_reference_library` now contains 605 chunks** (was 604 at end of
+session 16):
+- 584 pre-scrub A4M chunks (unchanged, still NOT retrofitted with scrub —
+  see BACKLOG #6b)
+- 13 v2 DFH chunks (post-scrub, from session 14)
+- 7 v3 PDF chunks (post-scrub, from session 16, with page-range locators)
+- **1 v3 Google Doc chunk (NEW, session 17, post-scrub, with section locator §1)**
+
+### M3 design proven
+
+Session 17's BACKLOG #11 closure ships the M3 design: extract v2's inline
+Google Doc logic into `ingester/loaders/types/google_doc_handler.py` as
+the single source of truth, and have v2's run() import the helpers back.
+This **deliberately crosses the session-14 "no v2 modifications" rule**,
+justified by:
+
+1. Byte-identical contract: v2 calls `extract_from_html_bytes()` with
+   `emit_section_markers=False`, which preserves the exact same stream
+   walking, image OCR, and stitching behavior as the pre-session-17 inline
+   code.
+2. Verified twice: v2 dry-run regression run before AND after the v3
+   dispatcher edit, both byte-identical to the session-16 baseline (2
+   files / 2 chunks / 1 vision cache hit / $0.0002 / same chunk-0 preview
+   text including the post-scrub `Dr. Nashat Latib` substitution).
+3. Backups on disk: `drive_loader_v2.py.s17-backup` (1,105 lines, pre-edit)
+   and `drive_loader_v3.py.s17-backup` (888 lines, pre-edit).
+
+### L3 (section markers) proven on real production content
+
+The L3 design — emit `[SECTION N]` markers at `<h1>`–`<h6>` headings so
+`derive_locator` can produce `§N` locators — works as designed. The Sugar
+Swaps Guide pilot chunk has `display_locator='§1'` from a real heading in
+the Google Doc HTML export. Two follow-up findings:
+
+1. **Google Docs without real heading tags get empty locators**, not crashes.
+   The DFH virtual dispensary docs use bold-text-as-pseudo-heading, so they
+   produced `display_locator=''` in the earlier 3-file dry-run. Filed as
+   BACKLOG #32 (smarter Google Doc locator detection with paragraph fallback).
+2. **`display_locator` is stored as empty string, not `None`**, due to a
+   Chroma-compat coercion in the v3 metadata writer. Session 16's
+   `test_format_context_s16.py` already covers the empty-locator render
+   path (one of its 23 tests), so this is non-blocking.
+
+### Permanent infrastructure improvements
+
+1. **`google_doc_handler.py` is the new dispatch path for Google Docs in
+   both v2 and v3.** Any future change to Google Doc extraction lands in
+   this one module. Future v3 handlers should follow the same M3 pattern
+   if they need to share code with v2 (which they shouldn't, because v2 is
+   frozen — but the precedent is here if needed).
+
+2. **L3 section-marker design generalizes.** Future handlers for other
+   section-bearing formats (docx, slides) can reuse the `[SECTION N]`
+   marker convention from `types/__init__.py` and `derive_locator` will
+   automatically render `§N` for them too. PAGE / SLIDE / ROW / SECTION /
+   LINE / TIME are all defined and tested.
+
+### What's actionable for next session
+
+The retrofit bundle (BACKLOG #6b + #17 + #18 + #20) is still the single
+biggest leverage point and is now joined by BACKLOG #30 (v3 metadata writer
+drops `extraction_method` and `library_name`), which bundles naturally
+with #18's canonical-display-fields migration. Session 17 also surfaced
+BACKLOG #29 (Canva editor metadata strip — the Sugar Swaps Guide chunk
+starts with a Canva edit URL that pollutes embeddings) as the next
+content-quality issue to address. Lower-priority items added: BACKLOG #31
+(`test_admin_save_endpoint_s16.py` clobbers `selection_state.json`) and
+BACKLOG #32 (smarter Google Doc locator detection beyond h1-h6).
+
+Alternative: another v3 handler. The natural next file types per the
+existing `MIME_CATEGORY` table in `drive_loader_v3.py` are docx, plain
+text, sheets, slides, image, av — in roughly that priority order based on
+how much Drive content each one would unlock. None are blocking; all are
+candidates for a focused session.
+
+### Hard rules carried forward (still in effect)
+
+All session 16 hard rules unchanged:
+
+- No Railway writes from sessions. Railway is read-only for sessions.
+- No deletions without approval + backup.
+- No touching legacy collections (`rf_coaching_transcripts`, pre-scrub 584 A4M).
+- Credentials ephemeral — never read `.env` content into chat.
+- Never reference Dr. Christina / Dr. Chris / Dr. Massinople in agent
+  responses. Layer B scrub catches new content; legacy is still not yet
+  protected (BACKLOG #6b).
+- Halt before `--commit` and show Dan dump-json output.
+- Pipe commit stdout to file, not `| tail`.
+- Step 0 of every session checks git status carefully + admin UI sanity.
+- Tech-lead volunteers architecture review at design-halt points.
+- Test in Chrome before Safari for admin UI iterative work.
+- Read the Flask access log first when debugging UI cache issues.
+- Verify BACKLOG closures end-to-end in the environment where they manifested.
+
+**One rule modified in session 17:** the "no v1/v2/common modifications without
+explicit reason" rule from session 14 was crossed deliberately for the M3
+extract-and-redirect pattern. The justification is documented above. Future
+sessions should treat v2 as frozen UNLESS the change is an extract-and-redirect
+to a shared module that preserves byte-identical v2 behavior, verified by
+dry-run regression. Anything else still needs explicit approval.
+

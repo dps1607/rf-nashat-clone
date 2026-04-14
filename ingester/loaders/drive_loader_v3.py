@@ -168,12 +168,20 @@ def _dispatch_file(
         )
 
     if category == "v2_google_doc":
-        raise HandlerNotAvailable(
-            "Google Docs handled by drive_loader_v2 only in session 16. "
-            "v3 → v2 adapter deferred to session 17 per BACKLOG #11. "
-            "For mixed selections, run `drive_loader_v2 --commit` on "
-            "Google Docs and `drive_loader_v3 --commit` on PDFs."
-        )
+        # Session 17 (BACKLOG #11) - Google Docs now route through the
+        # shared google_doc_handler. M3 design: same module v2 imports
+        # for its own run() orchestrator, called here with
+        # emit_section_markers=True so chunks get [SECTION N] markers
+        # the dispatcher post-pass converts to display_locator.
+        from ingester.loaders.types import google_doc_handler
+        class _HandlerConfig:
+            pass
+        cfg = _HandlerConfig()
+        cfg.vision_client = vision_client
+        cfg.use_cache = True
+        result = google_doc_handler.extract(drive_file, drive_client, cfg)
+        return category, result
+
 
     if category == "pdf":
         from ingester.loaders.types import pdf_handler
