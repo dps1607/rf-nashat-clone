@@ -350,3 +350,69 @@ After session 15 closes: `docs/NEXT_SESSION_PROMPT.md` will be refreshed
 to point session 16 at the v3 pilot type implementation, using the v3
 design doc from session 15 as the spec. Until then, session 15's named
 work is governance catch-up + v3 design only.
+
+
+---
+
+## Session 16 amendment (2026-04-14)
+
+### What changed
+
+**Gap 2 closed.** v3 drive loader now ships with PDF + page-marker locator support. End-to-end scrub proven through ingest → retrieval → Sonnet generation on real production content (Egg Health Guide, 7 chunks, 18-page PDF). The full Layer B scrub chain works on real data — chunk 0 had "Dr. Christina Massinople" rewritten to "Dr. Nashat Latib" at ingest, and Sonnet's response to a real query had zero leakage of the collaborator name anywhere.
+
+**`rf_reference_library` now contains 604 chunks** (was 597 at end of session 15):
+- 584 pre-scrub A4M chunks (unchanged, NOT yet retrofitted with scrub — see BACKLOG #6b)
+- 13 v2 DFH chunks (post-scrub, from session 14)
+- **7 v3 PDF chunks (NEW, session 16, post-scrub, with `display_locator` page references)**
+
+**v3 drive loader is now the production path** for new ingests of supported file types. v2 still works for legacy ingests but is frozen — no new file types will be added to it. Currently v3 supports: PDF (text-native + Gemini OCR fallback for scanned PDFs). Currently v3 explicitly DOES NOT support: Google Docs (`HandlerNotAvailable` raised; deferred to BACKLOG #11).
+
+**Admin UI file-level selection works in Safari** with verified click-through. Both the positive path (check folders/files → save → green toast) and the drive-root rejection path (check whole drive → save → clean error toast) verified end-to-end. The save handler reads from the DOM at save time rather than from a parallel `selectionState` cache, which was the pre-existing session-14 latency-bug source.
+
+### Permanent infrastructure improvements
+
+1. **Admin UI now sets `Cache-Control: no-store` on HTML responses** via an `@app.after_request` hook in `admin_ui/app.py`. This was added because Safari's page cache aggressively retains rendered HTML and ignored standard cache headers, which made iterative UI development unreliable. The hook only affects HTML; CSS/JS still cache normally. This is permanent infrastructure — any future admin UI iteration benefits from it.
+
+2. **JS save handler is now DOM-source-of-truth** for which checkboxes are selected. The pre-session-16 pattern was a parallel `selectionState` JavaScript object that was supposed to mirror the DOM but could drift out of sync. The new pattern queries `:checked` selectors at save time, which guarantees the save matches what the user sees. This is also permanent — eliminates a whole class of state-sync bugs.
+
+### What `selection_state.json` looks like now
+
+The session 16 schema is a two-bucket shape:
+
+```json
+{
+  "selected_folders": ["18S1VfRyFdckGU_p15m3UmXS8cjHtMEKM"],
+  "selected_files": ["1oJyksHGx9wo_44k31MD3nTnfxnBKBMlL"],
+  "library_assignments": {
+    "18S1VfRyFdckGU_p15m3UmXS8cjHtMEKM": "rf_reference_library",
+    "1oJyksHGx9wo_44k31MD3nTnfxnBKBMlL": "rf_reference_library"
+  },
+  "timestamp": "2026-04-14T..."
+}
+```
+
+The old folder-only shape (no `selected_files` key) is still accepted by the server endpoint for backward compatibility, but the admin UI now always sends both arrays.
+
+### Hard rules carried forward (still in effect)
+
+- No v1/v2/common modifications without explicit reason. v3 is a fresh module.
+- No Railway writes from sessions. Railway is read-only for sessions.
+- No deletions without approval + backup.
+- No touching legacy collections (`rf_coaching_transcripts`, pre-scrub 584 A4M).
+- Credentials ephemeral — never read `.env` content into chat.
+- Never reference Dr. Christina / Dr. Chris / Dr. Massinople in agent responses.
+  Layer B scrub catches new content; legacy is not yet protected (BACKLOG #6b).
+- Halt before `--commit` and show Dan dump-json output.
+- Pipe commit stdout to file, not `| tail`.
+- Step 0 of every session checks git status carefully (session 14 lesson).
+- Tech-lead volunteers architecture review at design-halt points (session 15 lesson).
+- **NEW (session 16):** Test in Chrome before Safari for admin UI iterative work (lesson from Bug 3).
+- **NEW (session 16):** Read the Flask access log first when debugging UI cache issues (lesson from Bug 2).
+- **NEW (session 16):** Verify BACKLOG closures end-to-end in the environment where they manifested (lesson from Bug 1).
+
+### What's actionable for next session
+
+The retrofit bundle is the single biggest leverage point: BACKLOG #6b (coaching scrub) + #17 (display_subheading normalization) + #18 (`format_context()` migration to canonical fields) + #20 (inline citation prompting). Together these are ~half-day of coordinated work that touches all 9,224 + 584 + 13 + 7 chunks once (one backup, one read pass, one write pass per collection) instead of being four incremental passes.
+
+Alternative: BACKLOG #11 (refactor v2 to expose `process_google_doc()` for v3 D2 adapter) unblocks the "one-button mixed-folder ingest" UX. Single dedicated session. Decision is Dan's at the start of session 17.
+

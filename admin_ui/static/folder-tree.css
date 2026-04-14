@@ -51,6 +51,7 @@
   align-items: center;
   gap: 1rem;
   margin-bottom: 1.25rem;
+  position: relative; /* session 16: anchor for .toast absolute positioning */
 }
 
 .search-container {
@@ -400,20 +401,47 @@
   gap: 0.75rem;
 }
 
-/* Toast */
+/* Toast — session 16 repositioned.
+ *
+ * Previous (session 14): position:fixed bottom-right corner. Result: on
+ * a full-size viewport the toast was invisibly far from the Save Selection
+ * button, and users couldn't tell whether a save succeeded. You could only
+ * see it by zooming the browser out.
+ *
+ * Session 16: the toast now floats RIGHT NEXT TO the Save button via an
+ * absolutely-positioned element inside .folders-toolbar. This guarantees
+ * it's always near the click that triggered it, regardless of scroll
+ * position or viewport size.
+ */
 .toast {
-  position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.5rem;
   padding: 0.75rem 1.25rem;
   background: var(--navy, #142A40);
   color: var(--white, #FFFFFF);
   border-radius: 8px;
   font-family: var(--sans, 'Inter', sans-serif);
-  font-size: 0.85rem;
-  box-shadow: 0 4px 12px rgba(20, 42, 64, 0.25);
+  font-size: 0.95rem;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(20, 42, 64, 0.35);
   z-index: 2000;
-  transition: opacity 0.3s, transform 0.3s;
+  opacity: 1;
+  transform: translateY(0);
+  animation: toast-slide-in 0.25s ease-out;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .toast.toast-success {

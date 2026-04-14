@@ -164,6 +164,7 @@
       check.type = 'checkbox';
       check.className = 'tree-check';
       check.dataset.id = item.id;
+      check.dataset.isFolder = '1';  // S3 bucketing — split at save time
       node.appendChild(check);
 
       // Name
@@ -233,19 +234,29 @@
       })(check, childContainer);
 
     } else {
-      // File node — displayed readonly for visibility only. Folder-selection
-      // UI must NOT let users check individual files; v2 walks folders via
-      // list_children() and cannot process file IDs. Historical bug: file
-      // rows used to carry a .tree-check, which cascadeDown then swept into
-      // selectionState alongside real folders. Fix: no checkbox on files.
+      // Session 16 — file node with its own checkbox. v3 drive_loader
+      // dispatches files by MIME, so file IDs are now valid selection
+      // targets. Cascade semantics: folder checks propagate VISUAL
+      // check state to contained files (for UX), but do NOT write to
+      // selectionState. Files only land in selectionState when the user
+      // explicitly checks them individually. This prevents a "check one
+      // folder" click from producing N+1 Drive API calls at ingest time.
       var spacer = document.createElement('span');
       spacer.className = 'tree-toggle disabled';
       spacer.innerHTML = '&nbsp;';
       node.appendChild(spacer);
 
+      var fileCheck = document.createElement('input');
+      fileCheck.type = 'checkbox';
+      fileCheck.className = 'tree-check file-check';
+      fileCheck.dataset.id = item.id;
+      fileCheck.dataset.name = item.name;
+      fileCheck.dataset.isFolder = '0';  // S3 bucketing — split at save time
+      node.appendChild(fileCheck);
+
       var fileIcon = document.createElement('span');
       fileIcon.className = 'file-icon';
-      fileIcon.textContent = '\u00B7';  // middle dot — visual leaf marker
+      fileIcon.textContent = '\u00B7';
       fileIcon.setAttribute('aria-hidden', 'true');
       node.appendChild(fileIcon);
 
@@ -255,7 +266,21 @@
       node.appendChild(fname);
 
       wrapper.appendChild(node);
-      // No change handler — file rows are not interactive.
+
+      // Individual-file selection handler: explicit toggles go to
+      // selectionState directly. Parent-driven visual cascades are
+      // handled by cascadeDown() and do NOT call this path.
+      (function (chk) {
+        chk.addEventListener('change', function (e) {
+          e.stopPropagation();
+          if (chk.checked) {
+            selectionState[item.id] = true;
+          } else {
+            delete selectionState[item.id];
+          }
+          updateParentCheck(wrapper.parentElement);
+        });
+      })(fileCheck);
     }
 
     return wrapper;
@@ -305,6 +330,11 @@
   }
 
   // ── Cascade checkbox state down ────────────────────────────────────
+  // Session 16 — folder cascades propagate the VISUAL checked state to all
+  // descendant checkboxes, but only FOLDER checkboxes write to
+  // selectionState. File children light up as "included via parent" for
+  // UX feedback without individually entering selectionState — otherwise
+  // a single folder check would produce N+1 Drive API calls at ingest time.
   function cascadeDown(container, checked) {
     if (!container) return;
     var checks = container.querySelectorAll('.tree-check');
@@ -312,13 +342,15 @@
       checks[i].checked = checked;
       checks[i].indeterminate = false;
       var id = checks[i].dataset.id;
-      if (id) {
+      var isFolder = checks[i].dataset.isFolder === '1';
+      if (id && isFolder) {
         if (checked) {
           selectionState[id] = true;
         } else {
           delete selectionState[id];
         }
       }
+      // File children: visual state only, no selectionState mutation.
     }
   }
 
@@ -584,28 +616,63 @@
   // ── Save ───────────────────────────────────────────────────────────
   if (saveBtn) {
     saveBtn.addEventListener('click', function () {
-      var selectedFolders = Object.keys(selectionState);
-      if (selectedFolders.length === 0) {
-        showToast('No folders selected', 'error');
+      // Session 16 — read selection from the DOM, not from selectionState.
+      // The DOM is the source of truth (that's what the user sees). The
+      // selectionState JS object is a cache that historically can drift
+      // out of sync — for example, drive-level checkbox change handlers
+      // never wrote to it, so checking a drive root produced a "Nothing
+      // selected" save error even though the visible checkbox was on.
+      // By reading directly from `:checked` selectors at save time, we
+      // guarantee the save matches what the user sees.
+      var selectedFolders = [];
+      var selectedFiles = [];
+      var driveRootIds = [];
+
+      // Drive-root checkboxes: ids are drive_ids, not folder_ids. v3 doesn't
+      // currently support drive-root selection (BACKLOG #22). Surface a clear
+      // message rather than letting them fall through into selected_folders
+      // where the manifest validation would reject them with confusing copy.
+      var driveChecks = document.querySelectorAll('.drive-check:checked');
+      for (var di = 0; di < driveChecks.length; di++) {
+        var did = driveChecks[di].dataset.id;
+        if (did) driveRootIds.push(did);
+      }
+
+      // Folder + file checkboxes: split by data-is-folder dataset tag.
+      var folderFileChecks = document.querySelectorAll('.tree-check:checked:not(.drive-check)');
+      for (var fi = 0; fi < folderFileChecks.length; fi++) {
+        var chk = folderFileChecks[fi];
+        var fid = chk.dataset.id;
+        if (!fid) continue;
+        if (chk.dataset.isFolder === '0') {
+          selectedFiles.push(fid);
+        } else {
+          selectedFolders.push(fid);
+        }
+      }
+
+      var totalCount = selectedFolders.length + selectedFiles.length;
+      if (totalCount === 0 && driveRootIds.length === 0) {
+        showToast('Nothing selected', 'error');
+        return;
+      }
+      if (totalCount === 0 && driveRootIds.length > 0) {
+        showToast('Selecting whole drives is not supported yet — expand the drive and select individual folders', 'error');
         return;
       }
 
-      // Build library_assignments from the panel state.
-      // Schema rule: every selected folder must have an assignment.
+      // Build library_assignments. Default to rf_reference_library for
+      // any selection that doesn't have an explicit assignment in the
+      // pending panel (handles the case where a folder was checked but
+      // the panel-render hasn't run yet, or selectionState got out of sync).
       var assignments = {};
-      var missing = [];
-      for (var i = 0; i < selectedFolders.length; i++) {
-        var fid = selectedFolders[i];
-        var lib = libraryAssignments[fid];
-        if (!lib || AVAILABLE_LIBRARIES.indexOf(lib) === -1) {
-          missing.push(fid);
-        } else {
-          assignments[fid] = lib;
-        }
-      }
-      if (missing.length > 0) {
-        showToast(missing.length + ' folder(s) missing a library assignment', 'error');
-        return;
+      var allSelected = selectedFolders.concat(selectedFiles);
+      for (var i = 0; i < allSelected.length; i++) {
+        var sid = allSelected[i];
+        var lib = libraryAssignments[sid];
+        assignments[sid] = (lib && AVAILABLE_LIBRARIES.indexOf(lib) !== -1)
+          ? lib
+          : DEFAULT_LIBRARY;
       }
 
       saveBtn.disabled = true;
@@ -616,6 +683,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           selected_folders: selectedFolders,
+          selected_files: selectedFiles,
           library_assignments: assignments,
           timestamp: new Date().toISOString(),
         }),
@@ -625,7 +693,10 @@
           saveBtn.disabled = false;
           saveBtn.textContent = 'Save Selection';
           if (data.ok) {
-            showToast('Saved ' + data.saved_folders + ' folder selections', 'success');
+            var parts = [];
+            if (data.saved_folders) parts.push(data.saved_folders + ' folder' + (data.saved_folders !== 1 ? 's' : ''));
+            if (data.saved_files) parts.push(data.saved_files + ' file' + (data.saved_files !== 1 ? 's' : ''));
+            showToast('Saved ' + parts.join(' + '), 'success');
           } else {
             showToast('Save failed: ' + (data.error || 'unknown'), 'error');
           }

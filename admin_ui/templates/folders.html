@@ -25,12 +25,17 @@
       <div id="search-results" class="search-results hidden"></div>
     </div>
     <button class="btn-primary" id="btn-save">Save Selection</button>
+    <!-- Session 16: toast lives inside the toolbar so CSS absolute positioning
+         anchors it right next to the Save button. Previous session-14 location
+         at the bottom of the body put it in the viewport's bottom-right corner,
+         which was functionally invisible on full-size monitors. -->
+    <div id="save-toast" class="toast hidden"></div>
   </div>
 
   <div class="pending-selections hidden" id="pending-selections">
     <div class="pending-header">
-      <h3 class="pending-title">Pending Selections <span id="pending-count">(0)</span></h3>
-      <span class="pending-hint">Each folder must be assigned to a target library before saving.</span>
+      <h3 class="pending-title">Selection <span id="pending-count">(0)</span></h3>
+      <span class="pending-hint">Folders and individual files can be selected. Each must be assigned to a target library before saving.</span>
     </div>
     <div class="pending-list" id="pending-list"></div>
   </div>
@@ -83,12 +88,11 @@
   </div>
 </div>
 
-<!-- Toast notification -->
-<div id="save-toast" class="toast hidden"></div>
+<!-- Toast moved into .folders-toolbar in session 16 for inline positioning -->
 {% endblock %}
 
 {% block scripts %}
-<link rel="stylesheet" href="{{ url_for('static', filename='folder-tree.css') }}">
-<script src="{{ url_for('static', filename='folder-tree.js') }}"></script>
-<script src="{{ url_for('static', filename='folder-search.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='folder-tree.css') }}?v=s16-dom-source-of-truth">
+<script src="{{ url_for('static', filename='folder-tree.js') }}?v=s16-dom-source-of-truth"></script>
+<script src="{{ url_for('static', filename='folder-search.js') }}?v=s16-dom-source-of-truth"></script>
 {% endblock %}

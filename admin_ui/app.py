@@ -119,6 +119,27 @@ Talisman(
     frame_options="DENY",
 )
 
+
+# Session 16 — Safari cache-busting for HTML pages.
+#
+# Symptom: editing a template + reloading in Safari doesn't pick up the new
+# template. Safari's back-forward cache (page cache) aggressively retains
+# rendered pages, ignoring standard If-Modified-Since semantics. Without this,
+# any iterative UI work in Safari is unreliable — you can't trust that what
+# you see in the browser matches what's on disk.
+#
+# Fix: force HTML responses to revalidate every time. Static files (CSS, JS)
+# are still cacheable by the browser via standard 304 negotiation; this only
+# affects HTML, which is cheap to re-render.
+@app.after_request
+def disable_html_caching(response):
+    if response.mimetype == "text/html":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # Rate limiting. Defense in depth — Cloudflare Access should stop brute-force
 # attempts from reaching us at all, but we enforce locally too. get_remote_address
 # reads request.remote_addr which ProxyFix has normalized to the real client IP.
@@ -425,7 +446,15 @@ def api_folders_search():
 @app.route("/admin/api/folders/save", methods=["POST"])
 @login_required
 def api_folders_save():
-    """Save folder selection state to JSON file."""
+    """Save folder + file selection state to JSON file.
+
+    Session 16 update: accepts `selected_folders` AND `selected_files`.
+    v3 drive_loader dispatches files by MIME, so file IDs are now valid.
+    Session 14's `non_folders` hard reject is replaced with a two-bucket
+    split: folder IDs validated against the manifest, file IDs validated
+    by mimeType lookup via manifest (or passed through if the manifest
+    doesn't know them — v3 will resolve via Drive API at ingest time).
+    """
     import json as json_mod
 
     user = current_user()
@@ -434,36 +463,58 @@ def api_folders_save():
     if not data:
         return jsonify({"ok": False, "error": "JSON body required"}), 400
 
-    # Schema validation: every selected folder must have a library assignment.
-    # Defense in depth — the frontend enforces this too, but a malformed POST
-    # (or a future caller bypassing the UI) must not silently land with empty
-    # assignments. v1 only allows rf_reference_library as a target.
+    # Schema validation: every selected folder/file must have a library
+    # assignment. Defense in depth — the frontend enforces this too, but a
+    # malformed POST (or a future caller bypassing the UI) must not silently
+    # land with empty assignments. v1 only allows rf_reference_library as a
+    # target.
     ALLOWED_LIBRARIES = {"rf_reference_library"}
-    selected = data.get("selected_folders", []) or []
+    selected_folders = data.get("selected_folders", []) or []
+    selected_files = data.get("selected_files", []) or []
     assignments = data.get("library_assignments", {}) or {}
-    if not isinstance(selected, list) or not isinstance(assignments, dict):
-        return jsonify({"ok": False, "error": "selected_folders must be list, library_assignments must be dict"}), 400
-    missing = [fid for fid in selected if fid not in assignments]
+    if not isinstance(selected_folders, list) or not isinstance(selected_files, list):
+        return jsonify({"ok": False, "error": "selected_folders and selected_files must be lists"}), 400
+    if not isinstance(assignments, dict):
+        return jsonify({"ok": False, "error": "library_assignments must be dict"}), 400
+
+    all_selected = list(selected_folders) + list(selected_files)
+    missing = [fid for fid in all_selected if fid not in assignments]
     if missing:
-        return jsonify({"ok": False, "error": f"missing library assignment for {len(missing)} folder(s)"}), 400
+        return jsonify({"ok": False, "error": f"missing library assignment for {len(missing)} id(s)"}), 400
     bad_libs = [v for v in assignments.values() if v not in ALLOWED_LIBRARIES]
     if bad_libs:
         return jsonify({"ok": False, "error": f"library not in allowed set: {bad_libs[:3]}"}), 400
 
-    # Defense in depth: every selected ID must be a folder in the manifest.
-    # The UI cascade used to sweep file checkboxes too, landing file IDs in
-    # selection_state.json which then crashed v2 at list_children() time.
-    # UI is fixed to not show file checkboxes, but we guard here regardless
-    # so any future caller bypassing the UI gets a clean 400 instead of a
-    # corrupt selection_state.json.
-    non_folders = [fid for fid in selected if not manifest.is_folder(fid)]
-    if non_folders:
+    # Session 16 — validate that folder IDs really ARE folders. File IDs
+    # cannot be validated at the manifest level because the manifest only
+    # indexes folders, not files. v3 resolves file IDs via live Drive API
+    # at ingest time (dispatcher's direct-file preflight handles both the
+    # "file exists" and "parent folder resolves in manifest" checks).
+    non_folders_in_folders_bucket = [
+        fid for fid in selected_folders if not manifest.is_folder(fid)
+    ]
+    if non_folders_in_folders_bucket:
         return jsonify({
             "ok": False,
             "error": (
-                f"{len(non_folders)} selected ID(s) are not folders in the manifest. "
-                f"First offender: {non_folders[0]}. "
-                f"Refresh the inventory if this folder was added after the last walk."
+                f"{len(non_folders_in_folders_bucket)} id(s) in selected_folders "
+                f"are not folders in the manifest. First: "
+                f"{non_folders_in_folders_bucket[0]}. Refresh inventory if this "
+                f"folder was added after the last walk — or was this meant to "
+                f"be a file? (put file IDs in selected_files)"
+            ),
+        }), 400
+    # Defense in depth: make sure file IDs aren't accidentally folders
+    folders_in_files_bucket = [
+        fid for fid in selected_files if manifest.is_folder(fid)
+    ]
+    if folders_in_files_bucket:
+        return jsonify({
+            "ok": False,
+            "error": (
+                f"{len(folders_in_files_bucket)} id(s) in selected_files are "
+                f"folders in the manifest (should be in selected_folders). "
+                f"First: {folders_in_files_bucket[0]}."
             ),
         }), 400
 
@@ -471,12 +522,18 @@ def api_folders_save():
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json_mod.dumps(data, indent=2, default=str))
 
-    folder_count = len(data.get("selected_folders", []))
+    folder_count = len(selected_folders)
+    file_count = len(selected_files)
     audit.log("folder_selection_saved", user=user_label, details={
         "selected_folders": folder_count,
-        "libraries": list(data.get("library_assignments", {}).keys()),
+        "selected_files": file_count,
+        "libraries": list(assignments.keys()),
     })
-    return jsonify({"ok": True, "saved_folders": folder_count})
+    return jsonify({
+        "ok": True,
+        "saved_folders": folder_count,
+        "saved_files": file_count,
+    })
 
 
 @app.route("/admin/api/folders/refresh-inventory", methods=["POST"])

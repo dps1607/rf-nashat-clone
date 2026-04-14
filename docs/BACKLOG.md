@@ -389,3 +389,423 @@ None yet processed.
 
 ## Patent strategy, technical architecture doc, clinic pilot deck
 Strategic docs, not started.
+
+
+---
+
+## NEW — added session 16 (2026-04-14, post-Gap-2)
+
+These 20 items are the wake of session 16 closing Gap 2 (PDF pilot) plus the
+admin UI file-level unlock and the four bugs surfaced during the click-through.
+Captured here so future sessions can pick them up cold.
+
+### 8. Answer-grounding verification pass
+**Priority:** Medium.
+
+**Scope:** A second-pass check (Claude or programmatic) that maps every factual
+claim in a Sonnet response back to a specific chunk in the retrieved context.
+Flag any claim that has no clear chunk source as "potentially hallucinated."
+Useful for evaluating retrieval quality and catching cases where Sonnet
+synthesizes beyond the retrieved evidence.
+
+**Why it matters:** the Step 10 /chat smoke test in session 16 visually verified
+that Sonnet's response was grounded in the Egg Health Guide chunks, but the
+verification was manual. A programmatic check would scale.
+
+**Estimated effort:** ~half-day session.
+
+---
+
+### 9. Retrieval confidence thresholding
+**Priority:** Low-Medium.
+
+**Scope:** When the top retrieval result has similarity below a threshold,
+have the agent refuse to answer rather than synthesizing from weak evidence.
+Today, retrieval always returns top-N regardless of similarity scores.
+
+**Estimated effort:** ~2 hours including A/B testing on representative queries.
+
+---
+
+### 10. Reconcile requirements.txt with venv state
+**Priority:** Medium.
+
+**Scope:** The local venv has drifted from `requirements.txt`. v2's Google/Vertex
+SDK upgrade in session 14 added packages that weren't pinned, and session 16
+added `pdfplumber`, `Pillow`, `reportlab`, `pypdfium2`, `pdfminer.six` via pip
+without updating `requirements.txt`. This means a fresh clone + `pip install -r
+requirements.txt` won't reproduce the working environment. Railway is
+unaffected (Railway's lockfile is separate), but local dev is brittle.
+
+**Action:** `pip freeze > requirements.txt` after pruning dev-only packages,
+then verify a fresh venv reproduces from it. Test that v2 still works against
+the new `requirements.txt` before committing.
+
+**Estimated effort:** ~1 hour with testing.
+
+
+### 11. Refactor v2 to expose `process_google_doc()` helper for v3 D2 adapter
+**Priority:** Medium-High. **Blocks** the "one-button mixed-folder" admin UI flow.
+
+**Background:** Session 16's design doc D2 assumed v3 could `from
+ingester.loaders.drive_loader_v2 import process_google_doc` and use it
+unchanged for Google Docs alongside the new PDF handler. The function never
+existed — v2's Google Doc logic is inline in its `run()` method, not extracted.
+Session 16 deferred Google Doc support entirely (raise `HandlerNotAvailable`)
+and shipped PDF-only.
+
+**Scope:**
+1. Extract v2's Google Doc fetching/parsing/chunking logic into a standalone
+   `process_google_doc(file_id, drive_client, scrubber, chunker) -> ExtractResult`
+   function that returns the same shape as v3's PDF handler.
+2. v3 dispatcher's existing `_HANDLERS["v2_google_doc"]` slot wires this in.
+3. Re-test v2's existing functionality to make sure the refactor doesn't
+   regress the legacy path (v2 still ships and is still used for legacy ingests).
+4. Pilot end-to-end: ingest a Google Doc via v3 dispatcher, verify chunk shape
+   matches PDF chunks (same v3_category-style metadata, scrub, locator tags
+   where applicable — Google Docs don't have pages but do have headings).
+
+**Why this matters:** until this lands, the admin UI can save mixed
+folder/file selections, but if the user picks a folder containing Google Docs,
+v3's dispatcher will deferred-skip them and the user won't get those docs into
+the collection. The user has to know which file types are supported.
+
+**Estimated effort:** dedicated session. ~3-4 hours including v2 regression test.
+
+---
+
+### 12. `--retry-quarantine RUN_ID` CLI flag
+**Priority:** Low.
+
+**Scope:** v3's dispatcher already writes a quarantine JSON for failed files
+at `data/ingest_runs/{run_id}.quarantine.json`. The `--retry-quarantine` CLI
+flag is stubbed but not implemented. Implement it: load the quarantine, retry
+each file, write a new quarantine if any still fail.
+
+**Estimated effort:** ~1 hour.
+
+---
+
+### 13. ✅ RESOLVED in session 16
+**Original scope:** "Direct-file chunk ID normalization (`drive:(direct-file):...`
+metadata bug)." Fixed mid-Step-9 in session 16 — `_enumerate_files()` now reads
+`drive_file["parents"][0]` as `real_parent_folder_id`, populates `folder_meta_by_id`
+the same way folder-selected entries do. Manifest miss → quarantine as REAL
+failure. Removed the `(direct-file)` fallback entirely. Verified across all 7
+Egg Health Guide chunks.
+
+
+### 14. Orphan chunk cleanup via md5Checksum metadata
+**Priority:** Medium.
+
+**Scope:** When a Drive file is updated (md5 changes), v3 will currently write
+NEW chunks for the new content but leave the OLD chunks orphaned in the
+collection — both versions retrievable. Add `source_file_md5` to chunk
+metadata at write time, then a periodic cleanup pass that:
+1. Lists all distinct (file_id, md5) pairs in the collection
+2. For each file_id with multiple md5s, queries Drive for the current md5
+3. Deletes chunks with stale md5s
+
+**Dependency:** BACKLOG #23 (also uses `source_file_md5`). Bundle.
+
+**Estimated effort:** ~2 hours.
+
+---
+
+### 15. Canonical display_subheading format decision
+**Priority:** Low.
+
+**Scope:** Today the display_subheading is constructed inconsistently across
+the three chunk populations (9,224 coaching, 584 pre-scrub A4M, 13 v2 DFH,
+7 v3 PDF). Decide on a canonical format — leading slashes? Drive name prefix?
+And retrofit all populations to it.
+
+**Bundle with:** #17 (cosmetic normalization), #6b (coaching scrub retrofit),
+#18 (format_context migration). Single coordinated retrofit session.
+
+---
+
+### 16. Document schema-union intent
+**Priority:** Low.
+
+**Scope:** v3 chunks have fields v1/v2 chunks don't (`v3_category`,
+`source_pipeline`, `display_locator`, `source_file_md5`, etc.). Document the
+fact that the chunk schema is a UNION across pipelines, not a strict shared
+schema. Add a section to `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` (or rename
+that file to `CHUNK_SCHEMA.md`) explaining which fields are required vs
+optional vs pipeline-specific.
+
+**Why:** future engineers (or future-me) reading retrieval code will assume
+all chunks have all fields. They don't. This trips up `format_context()`
+maintenance specifically.
+
+**Estimated effort:** ~30 min.
+
+
+### 17. display_subheading cosmetic normalization (REVISED SCOPE)
+**Priority:** Medium.
+
+**Original scope (session 15):** Normalize leading `//` and drive-name prefix
+in `display_subheading` for the 13 v2 DFH chunks.
+
+**Revised scope (session 16):** This affects ALL THREE chunk populations:
+- 9,224 `rf_coaching_transcripts` chunks
+- 584 pre-scrub A4M chunks in `rf_reference_library`
+- 13 v2 DFH chunks in `rf_reference_library`
+- 7 v3 PDF chunks in `rf_reference_library` (newest, may already be canonical)
+
+The 9,224 coaching chunks dominate by ~15x. Cosmetic-only changes to those
+shouldn't require re-embedding (metadata-only update).
+
+**Strong recommendation: bundle with #6b (coaching scrub retrofit), #18
+(`format_context()` migration), and #20 (inline citation prompting) into a
+single coordinated retrofit session.** One backup, one read pass, one write
+pass per collection. The bundle saves ~3-4 sessions of incremental work and
+~$10-20 in re-embedding if any of the changes need it.
+
+**Estimated effort as a bundled retrofit session:** ~half-day.
+
+---
+
+### 18. `format_context()` doesn't use session-9 normalized display fields
+**Priority:** Medium.
+
+**Scope:** `rag_server/app.py:format_context()` was written before session 9's
+display-field normalization and still reads old A4M-specific names
+(`module_number`, `module_topic`, `speaker`, `topics`). Session 16's Step 10
+added a minimal v3-aware branch (Option R3) so v3 PDF chunks render with
+`Source: ... — Link: ...`, but the legacy A4M code path is untouched.
+
+**Migration plan:**
+1. Define a canonical `chunk_to_display(chunk) -> dict` helper with fields
+   like `source_label`, `locator`, `link`, `summary` etc.
+2. Each chunk population's writer populates these at ingest time.
+3. `format_context()` reads only the canonical fields, no special branches.
+4. A/B test on representative queries to ensure response quality doesn't
+   regress.
+
+**Bundle with:** #17, #20.
+
+**Estimated effort:** ~half-day in the retrofit bundle session.
+
+---
+
+### 19. Post-scrub text quality check
+**Priority:** Low (cosmetic).
+
+**Scope:** Layer B scrub sometimes produces awkward sentences like "Drs.
+Nashat Latib and Dr. Nashat Latib" when the original mentioned the
+collaborator twice in the same paragraph. Add a post-scrub pass that detects
+these patterns (regex for repeated names, "and X and X", title repetition)
+and rewrites to natural-sounding prose.
+
+**Estimated effort:** ~1 hour. Optional polish.
+
+
+### 20. Inline citation prompting in agent system prompts
+**Priority:** Medium.
+
+**Scope:** Session 16's `format_context()` update makes source filenames, page
+locators, and Drive links available to Sonnet in retrieved context. The
+session 16 /chat smoke test confirmed Sonnet uses the chunks for grounding,
+but does NOT inline-cite them in the response — neither `nashat_sales.yaml`
+nor `nashat_coaching.yaml` currently prompts Sonnet to surface sources.
+
+**Action:** add to both persona prompts something like:
+> "When referencing specific facts from the retrieved context, cite the source
+> filename and page (e.g., 'per the Egg Health Guide, p. 8'). When referencing
+> a guide the user could read in full, offer the Drive link."
+
+**Bundle with:** #18 (`format_context()` migration). Same retrofit session.
+
+**Caveat:** A/B test required. Inline citations can change response tone in
+ways that affect Dr. Nashat's voice. May want sales agent to cite sparingly
+(brand voice) and coaching agent to cite explicitly (clinical accuracy).
+
+**Estimated effort:** ~1 hour including A/B test.
+
+---
+
+### 21. Folder-selection UI redesign
+**Priority:** Medium. **Single biggest friction point** in the folder-selection workflow.
+
+**Scope:** Eliminate the pending-panel/tree redundancy. Currently the
+`folders.html` template has a tree view with checkboxes AND a separate
+pending panel listing every selected folder/file. These show the same
+selection state twice, with the pending panel adding only a per-item library
+dropdown (vestigial — only one writable library exists). Session 16's
+file-unlock amplified the problem by adding file rows to both surfaces.
+
+**Redesign sketch:**
+- Remove the pending panel entirely
+- Add a sticky summary bar: `"N folders, M files selected — [Save]"`
+- Add inline `[N selected]` badges to folder rows in the tree where
+  descendants are checked
+- Auto-assign `rf_reference_library` at save time; drop the library dropdown
+  until a second writable library exists
+- Visual differentiation between drives, folders, and files (icons + indent),
+  which also fixes the "user can't tell drive checkbox from folder checkbox"
+  problem from session 16's bug #4
+
+**Dependencies:** none structural — server endpoint already accepts the
+correct shape. Pure UI work.
+
+**Estimated effort:** dedicated 60–90 min session, probably session 18 or 19.
+
+
+### 22. Drive-root selection UX
+**Priority:** Low.
+
+**Scope:** When a user checks a whole drive-root checkbox in the tree, session
+16 emits a clean error toast: `"Selecting whole drives is not supported yet —
+expand the drive and select individual folders."` Two improvements possible:
+
+(a) **Actually support drive-root selection** by walking all top-level folders
+when the ID matches a `drive_id` in the manifest. Adds a "select-all-folders-
+in-drive" semantic without requiring the user to click each one.
+
+(b) **Or just leave the error message as-is**, since it's already clear and
+correct. This is the simpler path.
+
+**Recommendation:** (b) for now. Revisit if users actually want (a).
+
+**Estimated effort:** (a) is ~2 hours; (b) is zero (already done).
+
+---
+
+### 23. Content-hash dedup at v3 commit time
+**Priority:** Medium.
+
+**Scope:** v3 currently dedupes by chunk_id (`drive:{slug}:{file_id}:{chunk_index}`).
+Different file IDs for the same content → separate chunk rows → retrieval
+noise. Session 16's user feedback raised this re: multiple Low AMH Guide
+versions in the same folder (`RH - Low AMH Guide.pdf`, `Low AMH GPT Guide`,
+`RH - Low AMH Guide-min.pdf`, `RH | Low AMH Guide - Original`).
+
+**Action:** add `source_file_md5` (from Drive's `md5Checksum` field, already
+in v3's `FILE_FIELDS`) to chunk metadata. Before writing chunks for a new
+file, query the target collection for existing chunks with the same md5. If
+found, skip with a "already ingested under different file_id" warning.
+
+Strategy D1 from the session 16 dedup discussion. Catches exact re-uploads
+(same content, different filename) but NOT "same topic, slightly different
+wording" — that's BACKLOG #24.
+
+**Bundle with:** #14 (orphan cleanup also uses md5 metadata).
+
+**Estimated effort:** ~30 lines of code + 1 test. ~1 hour.
+
+---
+
+### 24. Version-aware file selection UX
+**Priority:** Low-Medium.
+
+**Scope:** In the folder-selection UI, detect files within the same folder
+that share a naming pattern (`RH - X.pdf`, `X-min.pdf`, `X - Original`,
+`NL EDIT X`, etc.) and surface them as "possible duplicates" with a warning
+badge so the user can pick the canonical version explicitly.
+
+Optionally add embedding-similarity-based near-duplicate detection (strategy
+D3 from the session 16 discussion): for each new file, embed just the first
+chunk and query for similar first-chunks. If high similarity to an existing
+file, flag for user review rather than auto-skipping.
+
+**Bundle candidate:** with #21 (UI redesign session).
+
+**Estimated effort:** ~half-day in the redesign session.
+
+
+### 25. Non-recursive folder cascade option
+**Priority:** Low (design question).
+
+**Scope:** Today, checking a folder in the tree cascades the visual check
+state to all descendant folders (which then land in `selectionState`). Ingest
+behavior: v3 walks each of those descendant folders and picks up files. This
+is intentional — "select this whole branch."
+
+**Alternative:** check ONLY the top folder, and let v3's enumerator recurse
+at ingest time. Less surprising visually, but requires v3's `_enumerate_files()`
+to walk recursively, which it currently does not (v3 only walks the immediate
+contents of selected folders).
+
+**Decision needed:** which semantics? Recursive cascade (current, pre-session-16
+preserved) or single-folder-with-server-side-recursion (new)?
+
+**Recommendation:** keep current. The redesign session (#21) is when to revisit
+because the visual feedback for "what's selected" needs to make the answer obvious.
+
+**Estimated effort:** N/A — design question only.
+
+---
+
+### 26. Admin UI Safari testing protocol + selectionState retrofit
+**Priority:** Medium.
+
+**Scope:** Two related items from session 16's Bug 3:
+
+(a) **Testing protocol:** when developing the admin UI, test in Chrome FIRST.
+Safari has aggressive caching, console quirks (paste-doesn't-execute, filtered
+errors), and CSS oddities that make it unreliable for iterative development.
+The session 16 toast/save debugging loop took 4 rounds in Safari that would
+have taken 1 round in Chrome. **Add this to the standing session prompt
+checklist** so future sessions don't repeat the experience.
+
+(b) **`selectionState` retrofit:** session 16's save handler now reads from
+the DOM at save time, ignoring `selectionState`. But the **pending panel render
+path** still uses `selectionState` to know what to show. This means the panel
+can still drift out of sync with the DOM in edge cases (lazy-load re-renders,
+search filter rebuilds, etc.). Either:
+- (i) Rewrite the pending panel to also read from the DOM, OR
+- (ii) Eliminate the pending panel entirely as part of #21 (UI redesign)
+
+**Strong recommendation:** (ii). The UI redesign in #21 already removes the
+pending panel, so the `selectionState` retrofit becomes free.
+
+**Estimated effort:** (a) 5 min (add a sentence to session prompts).
+(b) folded into #21.
+
+---
+
+### 27. CSP allows Google Fonts (or self-host)
+**Priority:** Low.
+
+**Scope:** Safari's console showed during session 16 click-through:
+`[Error] Refused to load https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap because it does not appear in the style-src directive of the Content Security Policy.`
+
+The admin UI uses Google Fonts but Talisman's CSP `style-src` directive in
+`admin_ui/app.py` doesn't allowlist `fonts.googleapis.com`. Browser falls back
+to system fonts, which is why nobody noticed visually until now.
+
+**Two options:**
+(a) Add `fonts.googleapis.com` and `fonts.gstatic.com` to the CSP allowlist.
+(b) Self-host the fonts in `admin_ui/static/fonts/` and reference them locally.
+
+**Recommendation:** (b) for security/privacy and to eliminate an external
+dependency. Cormorant Garamond and Inter are both available under Open Font
+License — download once, ship locally.
+
+**Estimated effort:** ~30 min.
+
+---
+
+### 28. Verify BACKLOG closures end-to-end in the environment where they manifested
+**Priority:** Process improvement.
+
+**Scope:** Session 15 marked BACKLOG #4 (toast bug) "fixed" based on a CSS
+tweak that nobody verified in a real browser session. Session 16 discovered
+the toast was still completely broken — the fix was cosmetic and didn't
+address the actual root cause. Cost: 2 hours of session 16 time spent
+re-discovering and properly fixing the same bug.
+
+**Process change:** when closing a BACKLOG item, the closure note must include
+a verification step in the environment where the bug was originally reported.
+For UI bugs, that means a real browser click-through, not just a CSS file
+edit. For data bugs, that means a query against the live collection, not just
+a unit test on synthetic data.
+
+**Action:** add this to the standing session prompt checklist + the BACKLOG
+file's preamble.
+
+**Estimated effort:** 5 min documentation. Real cost is the discipline.
+
+---

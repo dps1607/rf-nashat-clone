@@ -1338,3 +1338,195 @@ All 14 modules chunked and ready for ChromaDB ingestion.
 2. Verify collection count and run sample retrieval queries
 3. Admin password rotation + add Nashat as second admin user
 4. Swap Haiku model ID in `rag_pipeline_v3_llm.py` from `claude-3-5-haiku-*` to `claude-haiku-4-5` (Haiku 3.5 family is no longer accessible to this org — confirmed via 404 on two separate snapshot IDs)
+
+
+---
+
+## Session 16 — Gap 2 closure (PDF pilot) + admin UI file-level unlock + 4 latent bugs surfaced (2026-04-14)
+
+**Outcome:** Gap 2 is closed. v3 drive loader ships with PDF + page-marker locator support. End-to-end scrub proven through ingest → retrieval → Sonnet generation on real production content. Admin UI now supports file-level selection in Safari with verified click-through. Four pre-existing bugs were discovered and fixed along the way (one of which had been masquerading as fixed since session 15). 604 chunks in `rf_reference_library` (was 597). Session spend ~$0.021 of $1.00 interactive budget.
+
+### What shipped
+
+**v3 drive loader (`ingester/loaders/drive_loader_v3.py`, ~910 lines):**
+- Per-MIME dispatcher (`SESSION_16_CATEGORIES = {"pdf", "v2_google_doc"}`). PDF handler ships; Google Doc adapter deferred to BACKLOG #11 (the v2 `process_google_doc()` helper that the design doc assumed exists actually doesn't — v2's logic is inline in its `run()` method, refactor required).
+- D12 per-file try/except + quarantine writer at `data/ingest_runs/{run_id}.quarantine.json`
+- 50% hard-fail threshold *excludes* deferred handlers so mixed Google-Doc + PDF folders don't trip it
+- OpenAI preflight on `--commit` (mirrors v2 session 14 pattern)
+- Local Chroma guard via `_drive_common.assert_local_chroma_path`
+- `load_dotenv(_REPO_ROOT / ".env")` at module import — added mid-commit because v2 expects shell-sourced env, but v3 needs to be self-sufficient when invoked via subprocess. Mirrors `rag_server/app.py`.
+- CLI: `--selection`, `--dry-run`, `--commit`, `--dump-json`, `--retry-quarantine RUN_ID` (deferred stub → BACKLOG #12)
+
+**PDF handler (`ingester/loaders/types/pdf_handler.py`, ~262 lines):**
+- pdfplumber native text extraction path
+- Gemini vision OCR fallback when mean chars/page < 50 (Option A — divergence from design doc D4's 5%-of-file-size rule, which is HTML-tuned, not PDF-tuned)
+- `OCR_RENDER_SCALE = 2.0` (~144 DPI). Reuses v2's `GeminiVisionClient` + `OcrCache` at `data/image_ocr_cache/` without modifying v2.
+- Synthetic test (reportlab-generated PDFs) covering both native and OCR paths: 2/2 PASS
+
+**Types module (`ingester/loaders/types/__init__.py`, ~239 lines):**
+- `ExtractResult` dataclass
+- `PAGE_MARKER` regex + helpers: `make_page_marker`, `strip_markers`, `derive_locator`, `derive_timestamp`, `chunk_with_locators`
+- 12 unit tests (marker round-trip + locator derivation across all formats: `p. 4`, `pp. 3-5`, `slide 12`, `slides 12-14`, `row 47`, `rows 40-47`, `§3`, `§§3-5`, `[HH:MM:SS]-[HH:MM:SS]`): 12/12 PASS
+
+**Architectural decisions made mid-session:**
+- **M2** — Phantom v2 helper: design doc D2 assumed `process_google_doc()` existed in v2 for v3 to import unchanged. It doesn't. Decision: ship session 16 PDF-only, raise `HandlerNotAvailable` on Google Docs with clear error. BACKLOG #11 = refactor v2 to expose the helper.
+- **Option X** — Page markers: handlers stitch text with `[PAGE N]` markers; chokepoint runs scrub; post-pass derives locator BEFORE stripping markers. Scrub-safe because marker format contains no scrub patterns. Generalizes to SLIDE/ROW/SECTION/LINE/TIME for future handlers.
+- **Option Q** — `chunk_with_locators` helper as single chunking entrypoint: chunk → scrub → for each chunk derive locator/timestamp → strip markers. Future handlers must call this, not raw `chunk_text()`.
+- **Option A** — PDF OCR fallback threshold: mean chars/page < 50, not byte-ratio. PDF-tuned vs HTML-tuned.
+- **Option R3** — `format_context()` minimal D7 v3-aware branch: renders `Source: {filename} — {display_locator}` + `Link: {webViewLink}` only for v3 chunks. Defers full session-9 normalized-display-field migration to BACKLOG #18.
+- **Option S3** — Folder/file bucketing in admin UI: single `selectionState` object + DOM dataset tags, split at save time. Initially shipped; later replaced by DOM-source-of-truth save handler when bug #4 below was discovered.
+
+
+### The Egg Health Guide commit (Gap 2 closure proof)
+
+PDF pick: `Egg Health Guide.pdf` (file_id `1oJyksHGx9wo_44k31MD3nTnfxnBKBMlL`), 18 pages, 7.3 MB, mean ~1400 chars/page (text-native, happy path). Lives at `3-marketing / 3. Funnels / Fertility Fast Track Low Ticket Funnel / Program Delivery PDFs`. Run id: `fd712b4d2cd440c0`.
+
+**Commit result:** 597 → 604 chunks. 7 chunks written. Spend $0.0008.
+
+**9-point Gap 2 closure verification (all PASS):**
+1. ✓ Count delta = +7
+2. ✓ All 7 chunks `v3_category='pdf'`
+3. ✓ Zero chunks have `(direct-file)` fallback in chunk ID
+4. ✓ All 7 chunks tied to file_id
+5. ✓ All 7 chunks `source_drive_slug='3-marketing'`
+6. ✓ `display_locator` populated on all 7: `pp. 1-6`, `pp. 6-8`, `pp. 8-10`, `pp. 10-12`, `pp. 12-16`, `pp. 16-18`, `p. 18`
+7. ✓ **Scrub fired on chunk 0**, `name_replacements=1` — rewrote "Dr. Christina Massinople" → "Dr. Nashat Latib" in real production content
+8. ✓ All `source_pipeline='drive_loader_v3'`
+9. ✓ Query "steps for optimizing egg health and ovulation" returns 5 of 5 top results as Egg Health Guide chunks
+
+**End-to-end scrub proven via /chat smoke test:**
+- Question: "I'm trying to improve my egg quality before starting IVF. What should I actually focus on?"
+- Mode: `nashat_sales / public_default`, 5 chunks retrieved (all Egg Health Guide)
+- Response was grounded in the retrieved content (CoQ10, methylfolate, Vitamin D, cortisol/progesterone, phthalates/BPA — all from chunks)
+- 6/6 safety checks PASS: zero "Christina", "Massinople", or "Dr. Chris" leakage anywhere in the output
+- Cost: ~$0.02
+
+This is the full Gap 2 + scrub integration proven on real data, on the real stack: ingest scrubbed → retrieval served scrubbed → Sonnet read scrubbed context → response contains no leaked name. Worked.
+
+
+### Step 11 — admin UI file-level unlock
+
+**Server (`admin_ui/app.py` `api_folders_save`):**
+- Replaced session 14's folder-only `non_folders` reject guard with a two-bucket contract: `selected_folders` + `selected_files` arrays
+- Validates folder IDs via `manifest.is_folder()` (must be true), file IDs by negation (must be false OR not in manifest — files aren't indexed in the folder-only manifest, so unknown IDs pass through and v3 resolves them via live Drive API at ingest time)
+- Returns `{ok, saved_folders, saved_files}` for the JS toast
+- **Backward-compatible:** old folder-only payloads with no `selected_files` key still return 200
+
+**16/16 endpoint tests PASS via Flask test client** (`scripts/test_admin_save_endpoint_s16.py`):
+- Two-bucket valid payload (1 folder + 1 file)
+- Misclassified folder rejected with 400
+- Folder-only backward-compat payload
+- File-only payload (new path)
+- Missing library assignment → 400
+- Unknown library → 400
+
+**JS (`admin_ui/static/folder-tree.js`) — four edits:**
+1. File checkboxes re-enabled with `class="tree-check file-check"` and `dataset.isFolder='0'`
+2. Folder checkboxes tagged with `dataset.isFolder='1'` at render time
+3. `cascadeDown()` propagates visual check state to file children but **does NOT** mutate `selectionState` for them — prevents N+1 Drive API calls when checking a folder containing many files
+4. Save handler initially split `selectionState` by DOM dataset tag (Option S3); later **completely rewritten** to read directly from `:checked` selectors at save time (DOM-as-source-of-truth) when bug #4 below was discovered.
+
+**Template (`admin_ui/templates/folders.html`):**
+- "Pending Selections" → "Selection" copy update; hint mentions files
+- Toast element relocated from end-of-body into `.folders-toolbar` for inline positioning
+- Cache-busting query strings on CSS/JS (`?v=s16-dom-source-of-truth`)
+
+
+### Four bugs surfaced + fixed during the click-through (the matryoshka)
+
+These four were nested. Each one had to be fixed before the next one could even be observed.
+
+**Bug 1 — Toast was invisible (latent since session 14, masquerading as fixed since session 15):**
+- Symptom: clicking Save Selection produced a button blink and no visible feedback. User couldn't tell whether the save succeeded.
+- Root cause: `.toast` was `position: fixed; bottom: 1.5rem; right: 1.5rem;` — placing it in the bottom-right viewport corner, far from the Save Selection button at the top of the content area. Visible only when the browser was zoomed way out.
+- Fix: `.toast` repositioned to `position: absolute; top: 100%; right: 0;` inside `.folders-toolbar` (which got `position: relative` to anchor). Also moved the toast `<div>` from end-of-body into `.folders-toolbar` so the absolute-positioning anchor works. Bumped font to 0.95rem and added a slide-in animation.
+- BACKLOG #4 had been marked "fixed" at the end of session 15 based on a cosmetic CSS tweak, but no one verified end-to-end in a real browser session. **Lesson #1: when closing a BACKLOG item, verify in the environment where it manifested.**
+
+**Bug 2 — Safari aggressively caches HTML pages and ignores standard cache headers:**
+- Symptom: after fixing Bug 1, the toast still appeared in the bottom-right corner. Cmd+Shift+R didn't help. Even cache-busting query strings on the CSS link didn't help.
+- Root cause: Safari's "back-forward cache" / page cache caches the entire rendered HTML and uses it on reloads, which means new query strings on linked CSS/JS never reach the browser if the cached HTML is being used. Discovered by reading the Flask access log: I saw `GET /static/folder-tree.css HTTP/1.1 304` (without the new `?v=` query string), proving Safari was rendering from a cached HTML page that had the OLD link tag.
+- Fix: added an `@app.after_request` hook in `admin_ui/app.py` that sets `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` + `Pragma: no-cache` + `Expires: 0` on all `text/html` responses. Static files (CSS, JS) are still cacheable via standard 304 negotiation; only HTML is forced to revalidate. **Permanent infrastructure improvement** — prevents this whole class of "I changed it but the browser doesn't see it" bugs in any future iteration of the admin UI.
+- **Lesson #2: read the server access log first when debugging UI cache issues.** The Flask log shows exactly what the browser is asking for and what's being served, which collapses 3+ rounds of guessing into 1.
+
+**Bug 3 — Drive-checkbox change handler never wrote to `selectionState`:**
+- Symptom: after fixing Bugs 1 and 2, clicking Save with two visibly-checked folders triggered the toast `"Nothing selected"`. JS console showed `document.querySelectorAll('.tree-check:checked').length === 2`.
+- Root cause: the two checked items were `tree-check drive-check` (drive root checkboxes for `1-operations` and `2-sales-relationships`), not folder-level checkboxes inside an expanded drive. The drive-checkbox change handler at `folder-tree.js:71` only calls `cascadeDown(childContainer, check.checked)` — it never adds the drive's own ID to `selectionState`. And `cascadeDown` had nothing to propagate to because the drives weren't expanded yet, so their child containers were empty. **This bug had existed since session 14** — it was hidden by Bug 1 (invisible toast) the entire time. The user couldn't tell the save was silently failing.
+- Fix: rewrote the save handler to **completely ignore `selectionState`** and read directly from the DOM at save time via `:checked` selectors. The DOM is the source of truth (it's what the user sees), and the JS state object was a redundant cache that drifted out of sync. New flow: query `.drive-check:checked` separately and emit a clean error toast (`"Selecting whole drives is not supported yet — expand the drive and select individual folders"`); query `.tree-check:checked:not(.drive-check)` and split by `dataset.isFolder` into folder/file buckets; default-assign `rf_reference_library` for any selection without an explicit library mapping.
+- **Lesson #3: prefer DOM-as-source-of-truth over parallel state caches** in jQuery-era code. `selectionState` was a 2014-era pattern. Modern frameworks bind state to DOM via reactivity, but for plain JS, querying `:checked` at the moment of need is more robust than maintaining a mirror.
+
+**Bug 4 — UI doesn't visually distinguish drives from folders:**
+- Symptom: the user clicked checkboxes labeled `1. Operations` and `2. Sales & Relationships`, reasonably believing they were selecting folders. They were actually drive roots. This is what made bug 3 confusing — the user was clicking what appeared to be folders but were actually drive checkboxes.
+- Status: not fixed in session 16. Filed as part of BACKLOG #21 (folder-selection UI redesign). The pending UI redesign should make drive vs folder vs file visually unambiguous.
+
+**Plus a cosmetic CSP issue:** Safari console showed `[Error] Refused to load https://fonts.googleapis.com/...` because Talisman's CSP `style-src` directive doesn't allowlist Google Fonts. Filed as BACKLOG #27. Doesn't affect functionality.
+
+
+### Files created (session 16)
+
+```
+ingester/loaders/types/__init__.py                239 lines  [new module]
+ingester/loaders/types/pdf_handler.py             262 lines  [new]
+ingester/loaders/drive_loader_v3.py              ~910 lines  [new]
+scripts/test_scrub_v3_handlers.py                          [synthetic PDF tests, 2/2]
+scripts/test_types_module.py                               [12/12]
+scripts/test_chunk_with_locators.py                        [end-to-end synthetic]
+scripts/test_format_context_s16.py                         [23/23]
+scripts/test_format_context_live_s16.py                    [real 604-chunk retrieval]
+scripts/test_chat_smoke_s16.py                             [/chat smoke, 6/6 safety]
+scripts/test_admin_save_endpoint_s16.py                    [16/16 endpoint]
+data/selection_state.json.s16-backup                       [pre-edit backup]
+docs/plans/2026-04-14-drive-loader-v3.md          738 lines [design doc]
+```
+
+### Files modified (session 16)
+
+```
+ingester/drive_client.py             — added download_file_bytes() (additive)
+rag_server/app.py                    — format_context() v3-category branch (R3, minimal)
+admin_ui/app.py                      — api_folders_save two-bucket contract
+                                     — disable_html_caching after_request hook (Safari fix)
+admin_ui/static/folder-tree.js       — file checkboxes, dataset tags, visual-only cascade,
+                                       DOM-source-of-truth save handler (4 edits)
+admin_ui/static/folder-tree.css      — toast repositioned + .folders-toolbar position:relative
+admin_ui/templates/folders.html      — toast inside toolbar, copy softened, cache-bust query strings
+data/selection_state.json            — session 16 two-bucket shape
+```
+
+### Test suite state (all green)
+
+```
+test_scrub_s13.py             19/19  ✓  (Layer B scrub — pre-existing)
+test_scrub_wiring_s13.py      PASS  ✓  (scrub wired into ingest pipeline — pre-existing)
+test_types_module.py          12/12  ✓  NEW
+test_chunk_with_locators.py   PASS  ✓  NEW
+test_scrub_v3_handlers.py     2/2   ✓  NEW (synthetic PDF, OCR fallback)
+test_format_context_s16.py    23/23  ✓  NEW
+test_admin_save_endpoint_s16.py  16/16  ✓  NEW
+```
+
+### Chroma state at end of session 16
+
+- `rf_reference_library`: **604 chunks** (597 baseline + 7 Egg Health Guide v3 PDF)
+- `rf_coaching_transcripts`: 9,224 chunks (unchanged, pre-scrub — see BACKLOG #6b for retrofit)
+- OCR cache (`data/image_ocr_cache/`): 29 files (28 baseline + 1 from synthetic OCR test)
+
+### Session 16 spend
+
+| Event | Cost |
+|---|---|
+| Step 5 synthetic OCR test | $0.0003 |
+| Step 9 commit (7 chunks embedded) | $0.0008 |
+| Step 10 /chat smoke (1 Sonnet 4.6 call + retrieval embedding) | ~$0.020 |
+| **Total** | **~$0.021** |
+
+2.1% of the $1.00 interactive budget. All other work (code edits, Flask test client, JS debugging, admin UI restarts, browser click-throughs) was $0.
+
+### Lessons carried forward to session 17
+
+1. **Read the server log first** when debugging UI cache issues. Flask's access log shows what the browser is asking for and what's being served — collapses 3+ rounds of guessing into 1.
+2. **Test in Chrome before Safari** for admin UI iterative work. Safari's caching, console quirks, and CSS oddities make it unreliable for fast iteration. Use Safari only for final verification.
+3. **When closing a BACKLOG item, verify in the environment where it manifested.** Session 15 marked "toast fixed" based on a CSS tweak nobody verified in a real browser session. Bug #1 above is the cost of that.
+4. **DOM-as-source-of-truth beats parallel state caches** in plain-JS code. If you find yourself maintaining a JS object that mirrors checkbox state, ask whether you can just query `:checked` at the moment of need.
+5. **Tech-lead volunteers architecture review at design halts.** Carried from session 15. Worked again in session 16 (M2/X/Q/A/R3/S3 decisions all flagged before code).
+6. **Halt before `--commit` and show dump-json.** Carried from session 14. Caught the metadata path bug in Step 7 before it landed in Chroma.
+

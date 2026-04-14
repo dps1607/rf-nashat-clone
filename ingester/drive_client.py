@@ -148,6 +148,33 @@ class DriveClient:
             .execute()
         )
 
+    def download_file_bytes(self, file_id: str) -> bytes:
+        """Download the raw bytes of a non-Google-Docs Drive file.
+
+        Added session 16 for v3 drive_loader dispatcher to pull down
+        PDFs, images, docx, pptx, xlsx, and binary audio/video files.
+        Uses Drive's `get_media` endpoint, which only works for binary
+        file types — calling it on a Google-native doc (application/
+        vnd.google-apps.document) will error. For Google-native types
+        use the existing HTML/PDF export paths in drive_loader_v2.
+
+        Note (session 16): this is net-new functionality in an existing
+        module. It does not modify any v1 or v2 code path. v1 and v2
+        continue to use export_html / existing methods unchanged.
+        """
+        from googleapiclient.http import MediaIoBaseDownload
+        import io as _io
+
+        request = self._service.files().get_media(
+            fileId=file_id, supportsAllDrives=True
+        )
+        buf = _io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _status, done = downloader.next_chunk()
+        return buf.getvalue()
+
     def list_children(self, folder_id: str) -> Iterator[dict]:
         """
         Yield every immediate child of a folder, handling pagination and

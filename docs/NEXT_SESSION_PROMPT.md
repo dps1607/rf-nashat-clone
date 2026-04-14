@@ -1,8 +1,8 @@
-# NEXT SESSION PROMPT — session 15
+# NEXT SESSION PROMPT — session 17
 
 > **⚠ READ THIS FIRST, BEFORE ANY READING LIST**
 >
-> Sessions 9–14 all used a "step 0 reality check" before doing any work. It has paid for itself every single session — session 11 caught a deprecated SDK import, session 12 caught half-loaded DC tools, session 13 caught uncommitted session 12 work, **session 14 MISSED a dirty working tree** (4 modified files plus 1 untracked were on disk at Step 0 and I didn't notice until 20 minutes in). Session 15 Step 0 has to be more careful about `git status` — not just "does it say clean on first glance" but "what files are actually listed as modified or untracked."
+> Sessions 9–16 all used a "Step 0 reality check" before doing any work. It has paid for itself every single session. Session 14 missed a dirty working tree. Session 16 surfaced four pre-existing UI bugs that had been hidden by each other. **Session 17's Step 0 must include UI-state sanity checks too**, not just data-plane checks — see Step 0 below for the new gates.
 
 ---
 
@@ -10,186 +10,290 @@
 
 Before reading anything else, run all gates. Stop and tell Dan if anything surprises you.
 
+### 0.1 — Tools
+
 1. **Tool enumeration.** Need `Desktop Commander:start_process` + `interact_with_process` + `read_file` + `write_file` + `edit_block` + `start_search`. If only a partial DC toolset is visible, call `tool_search` with a relevant query to force-load the rest.
 
-2. **Smoke test process execution.** Run `python3 -i`, verify `>>>` prompt, send `print("session 15 ok"); 2+2`.
+2. **Smoke test process execution.** Run `python3 -i`, verify `>>>` prompt, send `print("session 17 ok"); 2+2`.
+
+### 0.2 — Repo state
 
 3. **Repo state.** `cd /Users/danielsmith/Claude\ -\ RF\ 2.0/rf-nashat-clone && git status && git log --oneline -8`.
-   - Expected top commit: **a single session 14 commit** landing:
-     - `admin_ui/app.py` (cookie patch + save-endpoint guard)
-     - `admin_ui/manifest.py` (`is_folder` helper)
-     - `admin_ui/static/folder-tree.js` + `folder-tree.css` (folder-only UI)
-     - `ingester/loaders/drive_loader_v2.py` (OpenAI pre-flight + file-level dispatch)
-     - `scripts/test_login_dan.py` (diagnostic, new)
-     - `docs/HANDOVER.md` (session 14 entry)
-     - `docs/NEXT_SESSION_PROMPT.md` (this file)
-   - Below session 14: `0463c94`, `76903ac` (session 13 followups), `ac3f1fc` (session 13), `84fa22f` (session 11), etc.
-   - **Working tree must be completely clean** — if `git status` shows ANY modified or untracked files, STOP and surface them to Dan before proceeding. Do not assume they're stale or safe to ignore.
+   - **Expected top commit: a single session 16 commit** landing the v3 drive loader, types module, PDF handler, admin UI changes (api_folders_save two-bucket contract, after_request HTML cache disable, folder-tree.js DOM-source-of-truth save handler, toast repositioning), `format_context()` v3 branch, design doc, 7 new test scripts, 4 docs updates (HANDOVER, BACKLOG, STATE_OF_PLAY, NEXT_SESSION_PROMPT).
+   - Below session 16: the session 15 design-doc commit, session 14 commits (cookie patch + folder-only UI + v2 OpenAI preflight), session 13, etc.
+   - **Working tree must be completely clean.** If `git status` shows ANY modified or untracked files, STOP and surface them. Do not assume they're stale or safe to ignore. (Session 14 lesson.)
+
+### 0.3 — Data plane reality
 
 4. **Reality-vs-prompt check.** Verify these against the actual filesystem:
 
-   - **Chroma baseline.** `./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); print('rf_reference_library:', col.count())"`. Expected: **597** (595 from session 13 + 2 from session 14). If 595, session 14 rolled back — stop. If 598+, something wrote between sessions — stop.
+   - **Chroma baseline.** Run a Python one-liner to count `rf_reference_library`. **Expected: 604** (597 session-15 baseline + 7 v3 PDF chunks for Egg Health Guide). If 597, session 16 commit rolled back — stop. If 605+, something wrote between sessions — stop.
 
-   - **v2-ingested chunks queryable.** `col.get(where={"source_pipeline":"drive_loader_v2"}, limit=30)` — should return **13 chunk IDs** (11 from session 13 `ingest_run_id=8eb7bb77aedd4a4c`, 2 from session 14 `ingest_run_id=5fb763c8b9194f72`). At least 3 should have `name_replacements >= 1` (2 from session 13's supplement files, 1 from session 14's DFH landing page).
+     ```bash
+     ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); print('rf_reference_library:', col.count())"
+     ```
 
-   - **Drive auth.** `export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json && ./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"` → `OK rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`.
+   - **v3-ingested chunks queryable.** Query for `where={"source_pipeline":"drive_loader_v3"}` — should return **7 chunk IDs**, all from `ingest_run_id=fd712b4d2cd440c0` (Egg Health Guide), all with `v3_category='pdf'`, all with `display_locator` populated (`pp. 1-6`, `pp. 6-8`, `pp. 8-10`, `pp. 10-12`, `pp. 12-16`, `pp. 16-18`, `p. 18`). Chunk index 0 should have `name_replacements=1`.
 
-   - **Vertex AI auth.** `from google import genai; c = genai.Client(vertexai=True, project="rf-rag-ingester-493016", location="us-central1"); print(c.models.generate_content(model="gemini-2.5-flash", contents="Say 'ok' and nothing else.").text)` → `ok`.
+   - **v2-ingested chunks still queryable.** `col.get(where={"source_pipeline":"drive_loader_v2"}, limit=30)` — should still return **13 chunk IDs** (session 14 unchanged). At least 3 should have `name_replacements >= 1`.
 
-   - **OpenAI auth (live, not just presence).** Source `.env` in a subshell (`set -a && . ./.env && set +a`), then a minimal `embeddings.create("test")` call. Session 14 added this as a pre-flight inside the v2 loader itself, but still run it at Step 0 to catch a broken key before getting deep into work. Never read `.env` contents into chat.
+   - **OCR cache.** `ls data/image_ocr_cache/*.json | wc -l` → **29** (28 session-15 baseline + 1 from session 16's synthetic PDF OCR test).
 
-   - **OCR cache.** `ls data/image_ocr_cache/*.json | wc -l` → **28** (27 from session 13 + 1 new from session 14's DFH landing page image). If 27, session 14's vision OCR didn't persist — investigate.
+
+   - **Drive auth.**
+     ```bash
+     export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json
+     ./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"
+     ```
+     Expected: `OK rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`.
+
+   - **Vertex AI auth (gemini-2.5-flash via google.genai SDK).**
+     ```python
+     from google import genai
+     c = genai.Client(vertexai=True, project="rf-rag-ingester-493016", location="us-central1")
+     print(c.models.generate_content(model="gemini-2.5-flash", contents="Say 'ok' and nothing else.").text)
+     ```
+     Expected: `ok`.
+
+   - **OpenAI auth (live, not just presence).** Source `.env` in a subshell (`set -a && . ./.env && set +a`), then a minimal `embeddings.create("test")` call. Never read `.env` contents into chat.
 
    - **Scrub module on disk, wired, tests passing.**
+     ```bash
+     ./venv/bin/python scripts/test_scrub_s13.py            # 19/19
+     ./venv/bin/python scripts/test_scrub_wiring_s13.py     # PASS
      ```
-     ./venv/bin/python scripts/test_scrub_s13.py
-     ./venv/bin/python scripts/test_scrub_wiring_s13.py
+
+   - **v3 module tests still green.** Session 16 added these — they must still pass.
+     ```bash
+     ./venv/bin/python scripts/test_types_module.py             # 12/12
+     ./venv/bin/python scripts/test_chunk_with_locators.py      # PASS
+     GOOGLE_APPLICATION_CREDENTIALS=... ./venv/bin/python scripts/test_scrub_v3_handlers.py  # 2/2
+     ./venv/bin/python scripts/test_format_context_s16.py       # 23/23
+     ./venv/bin/python scripts/test_admin_save_endpoint_s16.py  # 16/16
      ```
-     Both should print `PASS`.
 
-   - **v1 regression.** `./venv/bin/python -m ingester.loaders.drive_loader --selection-file /tmp/rf_pilot_selection.json --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 --dry-run 2>&1 | tail -15`. Expect `files ingested: 1`, 2 low-yield skips. If `/tmp/rf_pilot_selection.json` no longer exists (reboot wiped `/tmp/`), recreate it from HANDOVER session 10.
 
-   - **v2 regression against real selection_state.json.** This is new for session 15. `cat data/selection_state.json` — should show `Designs for Health virtual dispensary` folder selection (or whatever Dan last saved in the UI; placeholder `["abc","def"]` is also acceptable as "fresh state"). If it's a real selection, run: `./venv/bin/python -m ingester.loaders.drive_loader_v2 --selection-file data/selection_state.json --dry-run 2>&1 | tail -20`. Dry-run should report files consistent with whatever folder is selected, exit 0, no tracebacks. If placeholder, skip this gate.
+   - **v1 regression.** v1 still works for the original pilot.
+     ```bash
+     ./venv/bin/python -m ingester.loaders.drive_loader \
+       --selection-file /tmp/rf_pilot_selection.json \
+       --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 \
+       --dry-run 2>&1 | tail -15
+     ```
+     Expect `files ingested: 1`, 2 low-yield skips. If `/tmp/rf_pilot_selection.json` no longer exists (reboot wiped `/tmp/`), recreate it from HANDOVER session 10.
 
-   - **Railway alive.** `curl -sI https://console.drnashatlatib.com | head -3` → HTTP/2 302.
+   - **v2 regression.** v2 still works for Google Docs.
+     ```bash
+     ./venv/bin/python -m ingester.loaders.drive_loader_v2 --dry-run 2>&1 | tail -20
+     ```
+     Expect a clean enumeration of the 13 chunks already ingested, no errors.
 
-If any check returns a surprise, stop and surface it.
+### 0.4 — Admin UI sanity (NEW gate added in session 16)
 
----
+5. **Admin UI process state.**
+   ```bash
+   lsof -iTCP:5052 -sTCP:LISTEN -P -n
+   ```
+   - If a Python process is listening on 5052: existing dev server is up. Verify it's running session-16 code by checking the modification time of its working files matches what the disk has.
+   - If no process is listening: that's fine, start a fresh one with `nohup ./venv/bin/python -m admin_ui.app > /tmp/rf_s17_admin_ui.log 2>&1 & disown` from the repo root.
 
-## What happened in session 14 (critical context)
+6. **HTML cache disable hook is active.** Quick curl smoke test:
+   ```bash
+   curl -sI http://localhost:5052/admin/folders | grep -i 'cache-control\|location'
+   ```
+   - 302 redirect to login is fine
+   - But a `Cache-Control: no-store` header on the 200 page (post-login) confirms the after_request hook is wired. If it's missing, session 16's Bug 2 fix didn't land — investigate before any UI iteration.
 
-Session 14 **closed Gap 1** — the goal STATE_OF_PLAY has named since session 9. Full end-to-end: admin UI folder picker → `data/selection_state.json` → `drive_loader_v2` → `rf_reference_library` (595 → 597) → `rag_server /query` returning the new chunks as top-ranked results. Two new chunks from `Designs for Health virtual dispensary`: one pure-text supplement list, one with a vision-OCR'd logo. Real spend: ~$0.0004 total. Scrub fired once (`name_replacements=1` on the DFH landing page). No Railway writes.
 
-**Session 14 also shipped** (via pre-existing uncommitted work that landed in the same commit, plus session 14's own additions):
-- Folder-only enforcement in admin UI (server-side guard + file checkboxes removed from tree) — **this encodes an explicit decision that file-level selection is not supported today**
-- Login cookie fix (`ADMIN_DEV_INSECURE_COOKIES` env var) for localhost HTTP dev
-- OpenAI live pre-flight on v2 `--commit` (catches silent 401 before processing files)
-- File-level dispatch in v2 loader (forward-compatible plumbing; dormant until v3 UI lands)
+7. **Selection state on disk has the session 16 two-bucket shape.**
+   ```bash
+   cat data/selection_state.json
+   ```
+   Expected: a JSON object with `selected_folders` AND `selected_files` keys (both arrays), `library_assignments` dict, and a `timestamp`. If only `selected_folders` exists (old shape), session 16 didn't land — investigate.
 
-**Two findings from session 14 worth carrying forward:**
+### 0.5 — Final reality summary
 
-1. **Dirty-tree blind spot at Step 0.** Session 14 started with 4 modified files and 1 untracked on disk from a prior uncommitted session. I treated the tree as clean and got confused ~20 minutes in when I saw unfamiliar code in `admin_ui/app.py`. Session 15 must check `git status` carefully, full output, not just a scan for "clean."
+8. **Print a one-line state summary** to confirm Step 0 passed:
+   ```
+   ✓ Step 0 PASS — repo clean at <commit_hash>, rf_reference_library: 604, v3 chunks: 7,
+     scrub tests green, admin UI on PID <pid>, selection_state v2 shape OK
+   ```
 
-2. **Don't poll long-lived shells to check file state.** When verifying file contents, use a fresh `start_process` + `cat`, not `read_process_output` on an old PID. Old shells' stdout buffers are concatenated histories and will mislead you.
-
----
-
-## Reading order (after Step 0 passes)
-
-1. **`docs/HANDOVER.md`** — session 14 entry at the top, in full. Session 13 for context if needed.
-2. **`docs/STATE_OF_PLAY.md`** — needs a session 14 update marking Gap 1 as CLOSED and naming Gap 2 (v3 multi-type). **First writing task of session 15 is this update, before any new implementation work.**
-3. **`docs/BACKLOG.md`** — read and verify the session 15 backlog commitments (listed below) have all been added. If any are missing, that's the second writing task of session 15.
-4. **`ingester/loaders/drive_loader_v2.py` `run()` function around lines 480–620** — see the file-level dispatch code that landed in session 14. Understand it before touching v2.
-5. **`admin_ui/app.py` save endpoint (`api_folders_save`)** — see the folder-only guard that landed in session 14. Understand it before touching folder-selection flow.
-
-**Do NOT read:** session 7/8/9/10 HANDOVER entries beyond orientation, ADR_005/006, session-7 plans, `drive_loader.py` v1 body (frozen), A4M Lineage A dead code.
-
----
-
-## What session 15 is actually for
-
-Session 14 closed Gap 1 but left **seven named items** in its wake. Session 15's job is to pick the most load-bearing one and close it. The list, ordered by priority:
-
-1. **BACKLOG.md entries for session 14's commitments** (small writing task, highest priority because everything downstream depends on these being captured):
-   - **v3 multi-type loader** (PDF, images, sheets, slides, docx, plain text, audio/video transcription). Named requirement from Dan: "all files have to happen." Needs per-type scope, per-type cost/risk, likely spans 3–5 sessions.
-   - **File-level selection UI + server unlock.** Loader dispatch already in place (session 14). UI needs to stop hiding file checkboxes; server guard needs to accept non-folder IDs. Naturally lands alongside v3.
-   - **Scrub retrofit** for legacy collections (`rf_coaching_transcripts` 9,224 chunks + original 584 `rf_reference_library` chunks). Carried from session 13. Real liability — former-collaborator names still present in legacy data.
-   - **Admin UI "save selection" visual feedback.** Button blinks with no toast on success/failure. Cost ~10 min of debugging in session 14. Pure UX.
-   - **UI selection state reset on save failure.** When the server guard rejects a save, the UI keeps the stale selection in memory and the next click re-sends the rejected payload. Workaround: page reload. Related to #4.
-   - **`/chat` endpoint 500'd on first test** in session 14 with a Claude API error about empty content. Used `/query` instead. Needs a 5-min look — maybe a payload shape issue, maybe a real bug.
-   - **`scripts/test_login_dan.py` needs a `sys.path` shim** so it runs without `PYTHONPATH=.`.
-
-2. **STATE_OF_PLAY.md update**: mark Gap 1 CLOSED, introduce Gap 2 = v3 multi-type, carry forward the other 6 items as tracked gaps under Gap 2's umbrella or as a separate "known issues" section.
-
-3. **v3 multi-type scoping document** (`docs/plans/2026-04-XX-drive-loader-v3.md`). Don't start coding v3 in session 15. Write the design first, same level of care as the session 11 v2 design doc. Key questions to answer:
-   - Which file types land in which order? (Dan's preference matters here — what's highest-volume in the reference library?)
-   - Per-type extraction strategy: native libraries, vision OCR fallback, transcription pipelines, etc.
-   - Per-type scrub validation — can the existing Layer B scrub catch collaborator names in each format, or does scrub need extensions?
-   - Per-type cost model (vision $, OCR $, Whisper $, embedding $ per GB of source material)
-   - File-level selection UI/server re-enablement as part of v3 rollout
-   - Staircase: which type is the v3 pilot? (My tentative suggestion: PDF first, because PDFs are probably the highest-volume non-Google-Doc type in the reference library, and native text extraction is cheap before any OCR work.)
-   - End-to-end proof criterion, same style as Gap 1 for Gap 2: one PDF ingested through the full pipeline, retrieved through rag_server, citations render.
-
-### Session 15 staircase
-
-1. **Step 1** — Step 0 reality check (above).
-2. **Step 2** — BACKLOG.md updates for the 7 items. HALT and show Dan before moving on.
-3. **Step 3** — STATE_OF_PLAY.md update. HALT and show Dan.
-4. **Step 4** — v3 design doc first draft. This is the bulk of session 15. HALT at the "pilot type + staircase" section so Dan picks the pilot type, then continue writing.
-5. **Step 5** — (stretch) fix the 2 cheap items from the backlog: `/chat` 500 debug + `test_login_dan.py` sys.path fix. Both are ~10 min of work each, both land in a session-15 cleanup commit.
-6. **Step 6** — end-of-session commit. Dan runs git.
-
-### Anti-goals for session 15
-
-- NO v3 implementation code — design doc only
-- NO modification of v1 or v2 loaders (they're working; leave them alone)
-- NO touching `rf_coaching_transcripts`
-- NO scrub retrofit execution (it's on the backlog for a later session)
-- NO Railway writes
-- NO bolting new file types onto v2 (all new file-type work goes into v3, fresh module)
-- NO re-triggering the OCR eyeball gate
-- NO git push/commit/add by Claude — Dan runs git
-- NO "offering Dan a menu of session-scope options" — the governance names the task, proceed (session 13 lesson, still valid)
-- NO writing premature handover messages mid-session — only at session end (session 14 lesson)
+If anything in 0.1–0.5 fails, **STOP and surface the failure to Dan before reading any further or doing any work.** Don't skip Step 0.
 
 ---
 
-## Cost expectations
+## Step 1 — Read the BACKLOG and pick scope (~5 minutes)
 
-- Step 1 (reality check): $0
-- Step 2 (backlog writes): $0
-- Step 3 (STATE_OF_PLAY writes): $0
-- Step 4 (v3 design doc): $0
-- Step 5 (cheap fixes): $0 (no ingest work)
-- **Total projected session 15 spend: $0**
+After Step 0 passes, read these files in this order. Don't read more than necessary.
 
-Cost gates unchanged: $1.00 interactive, $25 hard refuse.
+1. **`docs/STATE_OF_PLAY.md` — session 16 amendment** (the bottom section, ~70 lines). Tells you the state of the world coming into session 17.
 
----
+2. **`docs/HANDOVER.md` — session 16 entry** (the bottom section, ~200 lines). Tells you what shipped in session 16, what bugs were fixed, what lessons carry forward.
 
-## Hard rules carried forward
+3. **`docs/BACKLOG.md` — items 8 through 28** (the "NEW — added session 16" section). These are session 17's candidate scopes.
 
-- No ChromaDB writes without explicit Dan approval at the write moment
-- No git operations by Claude
-- No Railway operations
-- No deletions without approval and verified backup
-- Never reference Dr. Christina / Dr. Chris / Dr. Massinople / Massinople Park / Mass Park — scrub enforces at ingest; legacy chunks still unprotected (retrofit on backlog, not session 15)
-- Public agent never accesses `rf_coaching_transcripts`
-- Credentials ephemeral — never read `.env` into chat
-- Use Desktop Commander for file writes (`create_file` writes to Claude's sandbox, not Dan's Mac)
-- Before any commit-run, halt and show Dan the dump-json
-- Pipe commit-run stdout to a file, not `| tail`
-- **Step 0 checks `git status` carefully and treats ANY modified/untracked files as a surprise to surface** (session 14 lesson)
-- **Don't write handover messages mid-session** (session 14 lesson)
-- **Don't poll long-lived shells to check file state — use fresh processes** (session 14 lesson)
+4. Skim the rest of BACKLOG.md briefly for context on the older items (#1–#7 from session 15, plus the deferred-from-earlier-sessions items below). You don't need to read them in detail unless you pick something from there.
+
 
 ---
 
-## Tech-lead mandate (unchanged)
+## Step 2 — Scope decision (Dan picks)
 
-Claude holds tech-lead role. Tactical decisions (guard tuning, scrub rules, loader wiring, ingest mechanics, admin UI integration, v3 per-type design) are Claude's call. Strategic decisions (irreversible operations, money spend > $25, Railway writes, cross-collection retrofits, anything failing the "can we fix this later?" test) get flagged to Dan first.
+Session 16's tech-lead recommendation is one of two paths for session 17. **Do not pick autonomously — surface the options and let Dan choose.**
 
-Session scope is not a "strategic decision." STATE_OF_PLAY, BACKLOG, and HANDOVER name what's next. Read them and proceed. Don't offer Dan a menu of session-scope options.
+### Option A — The retrofit bundle (highest leverage)
+
+**Bundles:** BACKLOG #6b (coaching scrub retrofit) + #17 (display_subheading normalization across all 3 chunk populations) + #18 (`format_context()` migration to canonical fields) + #20 (inline citation prompting in agent system prompts).
+
+**Why bundle:** these four items all touch the same chunks (9,224 coaching + 584 A4M + 13 v2 + 7 v3 = 9,828 total). Doing them as a single coordinated session means one backup, one read pass, one write pass per collection. Doing them incrementally would be 4 separate sessions of overlapping work plus 4× the risk of partial-state collections.
+
+**Estimated effort:** ~half-day in one session.
+
+**Key risks:**
+- Re-embedding cost if any change requires it (most are metadata-only, but #20 might prompt-tune in a way that warrants an A/B retrieval test against a real query set)
+- The 9,224 coaching chunks dominate by ~15x — any per-chunk operation on them needs to be cheap or batched
+- BACKLOG #6b is the biggest unknown — has scrub ever been validated against the full coaching corpus, or just synthetic test data?
+
+**Approach:** Session 17 Step 0 + read STATE_OF_PLAY + read HANDOVER session 16 entry + read BACKLOG #6b/#17/#18/#20 in detail + scope a tight plan with Dan + execute. Halt before any write to a collection. Halt before any re-embed.
+
+### Option B — Google Doc adapter (unblocks "one-button" admin UI flow)
+
+**Single item:** BACKLOG #11. Refactor v2 to expose `process_google_doc(file_id, drive_client, scrubber, chunker) -> ExtractResult` as a standalone function. Wire it into v3 dispatcher's `_HANDLERS["v2_google_doc"]` slot. Re-test v2's existing functionality. Pilot end-to-end via v3 on a real Google Doc.
+
+**Why:** today, if the user picks a folder containing Google Docs through the admin UI, v3 deferred-skips them. The user has to know which file types are supported. Closing #11 means "select any folder, ingest all supported file types in one click" actually works.
+
+**Estimated effort:** dedicated session, ~3-4 hours including v2 regression test.
+
+**Key risks:**
+- v2's Google Doc logic may be more entangled with v2-specific state than the design assumes
+- Refactoring v2 risks regressing v2's existing 13-chunk path — must re-test
+- The pilot Google Doc needs to come from the existing manifest, not be created fresh
+
+### Other candidates (lower priority but valid)
+
+- **BACKLOG #21** — folder-selection UI redesign (eliminate pending-panel redundancy + drive-vs-folder visual differentiation). Session 16 user-tested and confirmed this is the biggest friction point in the admin UI. Dedicated 60–90 min session.
+- **BACKLOG #10** — reconcile `requirements.txt` with venv state. ~1 hour. Important for any new local dev clone.
+- **BACKLOG #27** — self-host Google Fonts to fix the CSP error. ~30 min.
+- **BACKLOG #23 + #14** — content-hash dedup + orphan cleanup (md5-based). Bundle, ~2 hours.
+
+
+**Tech-lead recommendation: Option A.** Reasons:
+1. Highest leverage per session-hour
+2. Touches the largest fraction of the corpus (9,828 chunks)
+3. Closes 4 BACKLOG items in one session
+4. Sets up a cleaner foundation for any subsequent work (especially #20 inline citations, which depends on #18 having landed)
+
+But Option B is also defensible if Dan wants to maximize "the admin UI works for everything" before doing more retrofit work. **It's Dan's call — surface both, recommend A, wait for the answer.**
 
 ---
 
-## Quick reference
+## Step 3+ — Execute the chosen scope
 
-- Repo root: `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone`
-- Local Chroma: `/Users/danielsmith/Claude - RF 2.0/chroma_db/` — **597 chunks in rf_reference_library as of session 14 end**
-- Railway production: `https://console.drnashatlatib.com` (untouched)
-- venv: `./venv/bin/python` (Python 3.11.3)
-- v1 loader: `ingester/loaders/drive_loader.py` (frozen)
-- v2 loader: `ingester/loaders/drive_loader_v2.py` (Google-Docs-only; OpenAI pre-flight + file-level dispatch added session 14)
-- Shared helpers: `ingester/loaders/_drive_common.py` (chunking chokepoint, Layer B scrub wired)
-- Scrub module: `ingester/text/scrub.py` (19/19 tests passing)
-- Admin UI: `admin_ui/app.py` (ADMIN_DEV_INSECURE_COOKIES env var + save-endpoint folder-only guard) + `admin_ui/templates/folders.html` + `admin_ui/static/folder-tree.js` (file checkboxes hidden)
-- Real selection state: `data/selection_state.json` — last used in session 14 to ingest `Designs for Health virtual dispensary`
-- Session 13 run record: `data/ingest_runs/8eb7bb77aedd4a4c.json` (11 chunks)
-- Session 14 run record: `data/ingest_runs/5fb763c8b9194f72.json` (2 chunks)
-- GCP project: `rf-rag-ingester-493016`, region: `us-central1`, model: `gemini-2.5-flash`
-- Service account: `/Users/danielsmith/.config/gcloud/rf-service-account.json` (mode 600)
-- Diagnostic script: `scripts/test_login_dan.py` (bcrypt hash verification — run with `PYTHONPATH=.`)
-- **Gap 1:** CLOSED in session 14
-- **Gap 2:** v3 multi-type loader — session 15 design doc, later sessions implement
+Once Dan picks, scope a tight plan **before** writing any code:
+1. List the files you'll touch
+2. List the test scripts you'll write or update
+3. List any data writes (Chroma operations, file edits) and identify halt points
+4. Identify the "minimum viable closure" — the smallest deliverable that proves the scope landed
+5. Estimate spend in API calls (embeddings + LLM inference)
+
+Get Dan's approval on the plan, THEN execute.
+
+**Standing rules carried forward (do not skip):**
+
+- **Halt before --commit.** Show dump-json before any write to Chroma. (Session 14 lesson.)
+- **Pipe commit stdout to a file**, not `| tail` — Step 9 of session 16 showed why.
+- **Tech-lead volunteers architecture review at design-halt points.** When a design doc has a question mark or assumption, surface it as M-options (M1/M2/...) before code. (Session 15 lesson, validated again in session 16's M2 phantom-helper case.)
+- **Read the Flask access log first** when debugging UI cache or save issues. (Session 16 lesson.)
+- **Test in Chrome before Safari** for admin UI iterative work. (Session 16 lesson.)
+- **When closing a BACKLOG item, verify in the environment where it manifested.** Real browser click-through for UI bugs, real query against live collection for data bugs. (Session 16 lesson, the matryoshka one.)
+- **No deletions without approval + backup.**
+- **No Railway writes from sessions.** Railway is read-only.
+- **No touching legacy collections** (`rf_coaching_transcripts`, pre-scrub 584 A4M) without Dan's explicit OK.
+- **Credentials ephemeral** — never read `.env` content into chat.
+- **Never reference Dr. Christina / Dr. Chris / Dr. Massinople** in agent responses. Layer B scrub catches new content; legacy is not yet protected (BACKLOG #6b).
+- **Dan does git operations**, not Claude.
+
+
+---
+
+## Budget for session 17
+
+- **$1.00 interactive gate.** If any single task projects above $1.00 in API spend, halt and surface the cost to Dan before proceeding.
+- **$25.00 hard refuse.** No single session should ever spend more than $25 in API calls. If a task projects above this, refuse and require explicit Dan approval.
+- **Session 16 spent ~$0.021** of $1.00 — well under. Session 17 has the same envelope.
+
+## Files you'll likely touch (depending on scope)
+
+**For Option A (retrofit bundle):**
+- `ingester/scrub.py` (or wherever the Layer B scrub helper lives)
+- `rag_server/app.py` (`format_context()` migration)
+- `config/nashat_sales.yaml`, `config/nashat_coaching.yaml` (inline citation prompting)
+- New: `scripts/retrofit_coaching_scrub_s17.py` (one-time pass over the 9,224 chunks)
+- New: `scripts/retrofit_display_subheading_s17.py` (one-time pass)
+- `docs/HANDOVER.md`, `docs/BACKLOG.md`, `docs/STATE_OF_PLAY.md`, `docs/NEXT_SESSION_PROMPT.md`
+
+**For Option B (Google Doc adapter):**
+- `ingester/loaders/drive_loader_v2.py` (extract `process_google_doc()`)
+- `ingester/loaders/drive_loader_v3.py` (wire the new helper into `_HANDLERS["v2_google_doc"]`)
+- `ingester/loaders/types/__init__.py` (maybe new locator type for Google Doc headings)
+- New: `scripts/test_v3_google_doc_handler.py`
+- `docs/HANDOVER.md`, `docs/BACKLOG.md`, `docs/STATE_OF_PLAY.md`, `docs/NEXT_SESSION_PROMPT.md`
+
+## Files you should NOT touch
+
+- `chroma_db/*` — never edit directly
+- `data/inventories/*.json` — folder walk output, never hand-edit
+- `data/audit.jsonl` — append-only via the audit module
+- Anything under `rf-coaching-call-recordings/` — pure read-only data
+
+
+## Step 0 cheat sheet (for quick reference at the start of session 17)
+
+```bash
+# Tools + repo
+cd "/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone"
+git status && git log --oneline -8
+
+# Chroma baseline (expect 604)
+./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); print('rf_reference_library:', col.count())"
+
+# v3 chunks queryable (expect 7)
+./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); r=col.get(where={'source_pipeline':'drive_loader_v3'}, limit=30); print('v3 chunks:', len(r['ids']))"
+
+# OCR cache (expect 29)
+ls data/image_ocr_cache/*.json | wc -l
+
+# Test suite (expect all green)
+./venv/bin/python scripts/test_scrub_s13.py
+./venv/bin/python scripts/test_scrub_wiring_s13.py
+./venv/bin/python scripts/test_types_module.py
+./venv/bin/python scripts/test_chunk_with_locators.py
+./venv/bin/python scripts/test_format_context_s16.py
+./venv/bin/python scripts/test_admin_save_endpoint_s16.py
+GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json ./venv/bin/python scripts/test_scrub_v3_handlers.py
+
+# Drive auth
+export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json
+./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"
+
+# Admin UI process check
+lsof -iTCP:5052 -sTCP:LISTEN -P -n
+
+# Selection state shape
+cat data/selection_state.json
+```
+
+If all of the above passes, print:
+```
+✓ Step 0 PASS — repo at <hash>, rf_reference_library: 604, v3: 7, OCR cache: 29,
+  all tests green, admin UI on PID <pid>, selection_state v2 shape OK
+```
+
+Then proceed to Step 1.
+
+---
+
+## End of session 17 prompt
+
+Session 16 closed Gap 2 with the Egg Health Guide as proof. The system has 604 chunks, the v3 PDF pipeline works end-to-end with scrub, the admin UI supports file-level selection in Safari, and four pre-existing UI bugs were fixed along the way. Session 17 picks up clean. Good luck.
