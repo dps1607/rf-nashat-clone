@@ -67,3 +67,11 @@ data/dumps/
 
 # Session 13+: persistent skipped-files log (runtime artifact)
 data/skipped_files_log.jsonl
+
+# Session 14+: ingest run records are tracked so we have an audit trail of
+# what got ingested when. The parent data/ is ignored (line 54), so we need
+# to negate at both the directory and file pattern to re-include.
+!data/ingest_runs/
+!data/ingest_runs/*.json
+# Also un-ignore the 'data/' prefix on ingest_runs specifically so git-add works.
+!data/ingest_runs

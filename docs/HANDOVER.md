@@ -6,6 +6,69 @@ Updated in place each session-end. Read this first to resume.
 
 ---
 
+## Session 14 — 2026-04-13 — GAP 1 CLOSED: end-to-end UI → selection → ingest → retrieval
+
+**Scope shipped:** full end-to-end roundtrip from admin_ui folder picker through `data/selection_state.json` through v2 ingest through `rf_reference_library` through rag_server semantic retrieval, proved with a live query. **`rf_reference_library`: 595 → 597** (2 new chunks from `Designs for Health virtual dispensary`, run_id `5fb763c8b9194f72`). Real spend: ~$0.0004 total (vision $0.0002, embedding $0.0002). No Railway writes. No git operations by Claude.
+
+**Gap 1 is closed.** STATE_OF_PLAY has named this as the goal since session 9; sessions 10, 11, 12, 13 all made real progress on pieces but all bypassed `selection_state.json` via `/tmp/rf_pilot_selection.json`. Session 14 stopped bypassing. Next major gap: **v3 multi-type loader** (see BACKLOG).
+
+**Step 0 reality check:** passed all functional gates but **missed a dirty working tree** — 4 files modified at session start that weren't mine (admin_ui folder-only enforcement work from a prior uncommitted session). Surfaced mid-session after reading `admin_ui/app.py` diff and seeing unfamiliar save-endpoint guard code. Cost ~20 min of confusion and one premature "partial handover" message that had to be walked back. Step 0 for session 15 must check `git status` in full, not just "working tree clean on first glance."
+
+### What landed
+
+1. **Login fix: `ADMIN_DEV_INSECURE_COOKIES` env var** (`admin_ui/app.py`). `SESSION_COOKIE_SECURE=True` combined with `session_cookie_secure=True` in Talisman was silently dropping session cookies when admin_ui ran on localhost HTTP — POST `/login` succeeded (audit log confirmed `login_success` events), but the browser discarded the `Secure`-flagged cookie on a plain HTTP response, so `@login_required` bounced the user back to `/login?next=/edit` in a loop. Patch: both cookie flags now read from `_SESSION_COOKIE_SECURE = not os.environ.get("ADMIN_DEV_INSECURE_COOKIES") == "1"`. Default is still `True` (production Cloudflare/Railway unchanged). Local dev opts in with `ADMIN_DEV_INSECURE_COOKIES=1` and gets a stderr warning at startup. Fully reversible, production behavior preserved.
+
+2. **OpenAI pre-flight on `--commit`** (`ingester/loaders/drive_loader_v2.py`). Session 13 wasted effort on a silent 401 from an expired key that passed the presence check but failed on first real embedding call. Added a ~15-line live pre-flight: on `--commit` only, make a minimal `embeddings.create(model="text-embedding-3-large", input="preflight")` call before processing any files; bail with a clear message on any exception. Verified firing in the session 14 commit-run (`openai preflight: OK`). Dry-runs unaffected (pre-flight is gated on `commit`, keeping dry-runs free).
+
+3. **File-level selection dispatch in v2** (`ingester/loaders/drive_loader_v2.py`, ~60 lines). Added a pre-resolve step before the main ingest loop that classifies each entry in `selected_folders` via `drive_client.get_file()`. Folders route to the existing `list_children` path unchanged. Files are grouped by parent folder and fed into the main loop as "virtual folder" entries with a prebuilt file list, skipping `list_children`. Dedup: if a folder AND files inside that folder are both selected, the folder walk subsumes the file-level entries. Design rationale: forward-compatible with v3 multi-type work — when PDF/image/sheet handlers land in v3, they plug into the same file branch. **Harmless in session 14 because Option A (folder-only) was picked,** but the code is in place for v3's benefit. Loop header changed from `for folder_id in selected:` to `for folder_id, library, prebuilt_files in resolved_entries:`; the list_children call is now gated on `prebuilt_files is None`.
+
+4. **Pre-existing folder-only enforcement work committed alongside session 14** (NOT authored in session 14, but landing in the same commit). These were on disk uncommitted at session start and I missed them in Step 0:
+   - `admin_ui/app.py` — server-side guard in `/admin/api/folders/save` rejecting any selected ID that isn't a folder in the manifest; returns clean 400 with first-offender ID
+   - `admin_ui/manifest.py` — `is_folder(fid)` helper for the guard
+   - `admin_ui/static/folder-tree.js` — file checkbox rendering removed from the tree UI
+   - `admin_ui/static/folder-tree.css` — styling support for the above
+   
+   Decision made in-session (Option A, explicitly confirmed by Dan): keep folder-only as the current behavior. File-level selection is a permanent requirement but belongs to the v3 multi-type effort, not session 14. The v2 dispatch code from point 3 above is the loader half of file-level support; the UI and server guard are the UI half that will need reversing in v3.
+
+5. **`scripts/test_login_dan.py`** — diagnostic kept for future login debugging. Prompts for a password via `getpass`, runs it through the exact `authenticate()` path admin_ui uses, prints PASS/FAIL. Password never touches chat or logs. Used in session 14 to rule out bcrypt-hash mismatch before finding the cookie bug.
+
+### End-to-end proof (Gap 1)
+
+Full roundtrip, all in session 14:
+
+1. **UI save** — Dan opened http://localhost:5052, selected `Designs for Health virtual dispensary` under `7. Supplements`, assigned `rf_reference_library`, hit save. `audit.jsonl` logged `folder_selection_saved` at 04:18:53 UTC, 1 folder, user `dan`.
+2. **File on disk** — `data/selection_state.json` contained exactly 1 folder ID `18S1VfRyFdckGU_p15m3UmXS8cjHtMEKM` with correct library assignment, valid schema.
+3. **Dry-run** — v2 against real `data/selection_state.json`: 2 files seen, 2 ingested, 0 skipped. `Wish list for PL of DFH supps - 9/23` (536 words, 0 images) and `DFH Virtual Dispensary landing page` (247 words, 1 image). Projected spend $0.0002.
+4. **Commit-run** — exit 0, `openai preflight: OK`, `wrote 2/2 chunks`, run record `data/ingest_runs/5fb763c8b9194f72.json`.
+5. **Chroma direct query** — `rf_reference_library.count() == 597`, both new chunk IDs retrievable with full metadata populated (`source_pipeline=drive_loader_v2`, `source_collection=rf_reference_library`, `display_*` fields set).
+6. **Scrub fired** — `DFH Virtual Dispensary landing page` chunk has `name_replacements=1`. Something in that doc had a former-collaborator name; Layer B replaced it with "Dr. Nashat Latib" at ingest time. Confirms scrub is wired into v2's write path, not just the tests.
+7. **rag_server retrieval** — started locally on :5051, health endpoint reported `loaded_collections.rf_reference_library: 597`. POST `/query` with question "What supplements does Designs for Health offer for private label?" returned the two new chunks as top-2 results (distances 0.346 / 0.428), followed by session 13 supplement chunks. End-to-end proven.
+
+### Known issues captured (not fixed in session 14 — BACKLOG fodder)
+
+- **`/chat` endpoint 500'd on first test** with a `messages.0: user messages must have non-empty content` Claude API error. Used `/query` (raw retrieval) instead to close Gap 1. Retrieval layer proven; Claude-generated citation response not proven. 5-min look in session 15.
+- **Admin UI "save selection" button has no visual feedback.** POST succeeds (200 OK logged, audit entry written) but nothing changes on screen. Cost ~10 min of "I hit save, nothing happened" debugging during session 14. Pure UX, low priority.
+- **UI cascade leaves stale in-memory state after failing saves.** When the save-endpoint guard rejects a selection (e.g., cascaded file IDs), the UI's `selectionState` object doesn't reset, so the next click sends the same rejected payload. Workaround: reload the page. Related to the lack of visual feedback above.
+- **`scripts/test_login_dan.py` has an import-path foot-gun.** Needs `PYTHONPATH=.` to find `admin_ui.auth`. Either fix the script to add the repo root to `sys.path`, or document it in the file header. Documented in the file header for session 14; script-path fix is session 15 cleanup.
+
+### Process failures in session 14 (for the record)
+
+- **Missed dirty working tree at Step 0.** Should have been caught by the first `git status`. Cost ~20 min of mid-session confusion when I misread the pre-existing changes as someone "working in parallel" and wrote a panicked handover message. Session 15 Step 0 must check `git status` carefully.
+- **Misread polled process output as current state.** When I tried to check `selection_state.json` via `read_process_output`, I got back a buffer that concatenated hours of old output — mistook a stale `cat` result for the live file contents. Switched to `start_process` + direct `cat` and the actual state became clear. Lesson: for file state checks, always use a fresh process, never poll a long-lived shell.
+- **Wrote a premature "session ended, handover for session 15" message** based on the misread above, then had to retract it when Dan asked "what happened, there's only one session open." Cost conversational trust. **Rule going forward: do not write handover messages mid-session unless the session is genuinely over.**
+- **Login-cookie debug took ~15 min** when the audit log already showed `login_success` for user `dan` — that alone should have told me auth was working and the bug was in session handling. Should have checked cookie config immediately. Lesson: when auth logs say success but the user sees a redirect loop, session cookies are the first suspect, not auth.
+
+### State at session end
+
+- **`rf_reference_library`:** 597 chunks (13 via `drive_loader_v2`, 584 via `drive_loader`/pre-scrub legacy)
+- **Working tree before commit:** 5 modified files (listed above), 1 untracked (`scripts/test_login_dan.py`). Everything listed gets committed as session 14. Clean afterward.
+- **Branch:** `main`, 4 commits ahead of `origin/main` (unpushed session 13 followup work carried forward, plus the forthcoming session 14 commit = 5 ahead). Push is Dan's call.
+- **Admin UI:** still running on :5052, PID `11300`, started by Dan with `ADMIN_DEV_INSECURE_COOKIES=1`, serves current (patched) code. No need to restart for session 15 unless cookie/auth behavior is under test.
+- **rag_server:** stopped at end of session 14 (was only started for Step 7 smoke test).
+- **Hard rules honored:** no git by Claude, no Railway writes, no non-approved deletions, no references to scrubbed collaborator names, no credentials persisted.
+
+---
+
 ## Session 13 — 2026-04-13 — Wire scrub, redesign v2 guard, first v2 commit-run
 
 **Scope shipped:** triple-dedup edge case fixed in `scrub.py`, `scrub_text()` wired into `_drive_common.chunk_text()` as the single chokepoint for v1+v2, v2 low-yield guard redesigned from ratio-based to absolute-word-floor with usable-images check, dump-json skip-path bug fixed, persistent `skipped_files_log.jsonl` audit trail added, **first v2 commit-run landed: 11 chunks into local `rf_reference_library` (584 → 595).** Real spend: $0.0012 embeddings, $0 vision (54/54 cache hits). No Railway writes. No git operations by Claude.

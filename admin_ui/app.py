@@ -79,10 +79,19 @@ app.secret_key = SESSION_SECRET
 # X-Forwarded-For chain onward to us.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-# Session cookie hardening
+# Session cookie hardening.
+# SESSION_COOKIE_SECURE defaults to True (production: Cloudflare/Railway both
+# terminate TLS so cookies should only flow over HTTPS). Local dev over plain
+# HTTP localhost can opt out via ADMIN_DEV_INSECURE_COOKIES=1, otherwise the
+# browser silently drops the session cookie and login redirects loop.
+_DEV_INSECURE_COOKIES = os.environ.get("ADMIN_DEV_INSECURE_COOKIES", "").strip() == "1"
+_SESSION_COOKIE_SECURE = not _DEV_INSECURE_COOKIES
+if _DEV_INSECURE_COOKIES:
+    print("WARNING: ADMIN_DEV_INSECURE_COOKIES=1 — session cookies will flow over HTTP. Local dev only.",
+          file=sys.stderr)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,        # https only — Cloudflare/Railway both TLS
+    SESSION_COOKIE_SECURE=_SESSION_COOKIE_SECURE,
     SESSION_COOKIE_SAMESITE="Strict",  # no cross-site cookie sharing
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
@@ -104,7 +113,7 @@ Talisman(
     force_https=False,          # Cloudflare/Railway handle TLS termination
     strict_transport_security=True,
     strict_transport_security_max_age=31536000,
-    session_cookie_secure=True,
+    session_cookie_secure=_SESSION_COOKIE_SECURE,
     session_cookie_http_only=True,
     referrer_policy="strict-origin-when-cross-origin",
     frame_options="DENY",
@@ -440,6 +449,23 @@ def api_folders_save():
     bad_libs = [v for v in assignments.values() if v not in ALLOWED_LIBRARIES]
     if bad_libs:
         return jsonify({"ok": False, "error": f"library not in allowed set: {bad_libs[:3]}"}), 400
+
+    # Defense in depth: every selected ID must be a folder in the manifest.
+    # The UI cascade used to sweep file checkboxes too, landing file IDs in
+    # selection_state.json which then crashed v2 at list_children() time.
+    # UI is fixed to not show file checkboxes, but we guard here regardless
+    # so any future caller bypassing the UI gets a clean 400 instead of a
+    # corrupt selection_state.json.
+    non_folders = [fid for fid in selected if not manifest.is_folder(fid)]
+    if non_folders:
+        return jsonify({
+            "ok": False,
+            "error": (
+                f"{len(non_folders)} selected ID(s) are not folders in the manifest. "
+                f"First offender: {non_folders[0]}. "
+                f"Refresh the inventory if this folder was added after the last walk."
+            ),
+        }), 400
 
     state_path = Path(os.environ.get("INGESTER_DATA_ROOT", "data")) / "selection_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)

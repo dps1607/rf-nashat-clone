@@ -64,6 +64,22 @@ class ManifestLoader:
         for sub in node.get("subfolders", []):
             self._index_node(drive_slug, sub)
 
+    def is_folder(self, folder_id: str) -> bool:
+        """
+        Return True iff folder_id appears in the manifest as a folder.
+
+        Used by the /admin/api/folders/save endpoint to reject file IDs
+        masquerading as folder IDs (defense in depth — the UI is expected
+        to only send folder IDs, but any future caller bypassing the UI
+        must not silently land file IDs in selection_state.json).
+        """
+        if not folder_id:
+            return False
+        for entry in self._folder_index:
+            if entry.get("folder_id") == folder_id:
+                return True
+        return False
+
     @property
     def drives(self) -> list[dict]:
         """Return drive-level metadata (no folder tree — just summary stats)."""

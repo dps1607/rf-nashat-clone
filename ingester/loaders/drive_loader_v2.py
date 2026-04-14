@@ -486,6 +486,26 @@ def run(
         )
         return 2
 
+    # Session 14: live pre-flight to catch silent 401 / invalid-key failures
+    # BEFORE processing files. Session 13 wasted a commit-run on an expired key
+    # that passed the presence check but failed on first embedding call.
+    if commit:
+        try:
+            from openai import OpenAI as _OpenAI
+            _probe = _OpenAI().embeddings.create(
+                model="text-embedding-3-large", input="preflight"
+            )
+            if not _probe.data or len(_probe.data[0].embedding) != 3072:
+                raise RuntimeError("unexpected embedding shape")
+            print("openai preflight: OK")
+        except Exception as _e:
+            print(
+                f"REFUSING TO RUN: OpenAI pre-flight failed: {_e}\n"
+                f"Check OPENAI_API_KEY validity before re-running with --commit.",
+                file=sys.stderr,
+            )
+            return 2
+
     if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and not os.environ.get(
         "GOOGLE_SERVICE_ACCOUNT_JSON"
     ):
@@ -540,8 +560,65 @@ def run(
     files_low_yield_skipped: list[dict] = []
     files_vision_failed_skipped: list[dict] = []
 
-    for folder_id in selected:
-        library = assignments[folder_id]
+    # -------------------------------------------------------------------------
+    # Pre-resolve selection entries into (folder_id, library, prebuilt_files)
+    # tuples. Each selected entry is classified via get_file():
+    #   - folder → processed by walking list_children() as before
+    #   - file   → grouped by its parent folder; the parent becomes a "virtual
+    #              folder" with a prebuilt file list (skipping list_children)
+    # If a folder AND files inside that same folder are both selected, the
+    # folder walk subsumes the file-level entries (dedup by parent folder).
+    # Session 14 change. Still Google-Docs-only; v3 will add multi-type.
+    # -------------------------------------------------------------------------
+    folder_walks: list[tuple[str, str]] = []           # (folder_id, library)
+    file_level: dict[str, list[dict]] = {}             # parent_folder_id -> [file_dicts]
+    file_level_library: dict[str, str] = {}            # parent_folder_id -> library
+    folder_walk_ids: set[str] = set()
+
+    for entry_id in selected:
+        library = assignments[entry_id]
+        try:
+            meta = drive_client.get_file(entry_id)
+        except Exception as e:
+            print(f"ERROR: cannot resolve selection entry {entry_id}: {e}",
+                  file=sys.stderr)
+            continue
+        entry_mime = meta.get("mimeType", "")
+        if entry_mime == ingester_config.MIME_FOLDER:
+            folder_walks.append((entry_id, library))
+            folder_walk_ids.add(entry_id)
+        else:
+            parents = meta.get("parents") or []
+            if not parents:
+                print(f"ERROR: file {entry_id} ({meta.get('name','?')}) has no "
+                      f"parent folder; cannot assign folder_meta — skipping",
+                      file=sys.stderr)
+                continue
+            parent_id = parents[0]
+            file_level.setdefault(parent_id, []).append(meta)
+            # First writer wins on library if same parent gets multiple
+            # file-level selections with conflicting libraries
+            file_level_library.setdefault(parent_id, library)
+
+    # Build the unified iteration list. Folder walks first (they subsume
+    # any file-level selections for files inside them).
+    resolved_entries: list[tuple[str, str, Optional[list[dict]]]] = []
+    for folder_id, library in folder_walks:
+        resolved_entries.append((folder_id, library, None))
+    for parent_id, files in file_level.items():
+        if parent_id in folder_walk_ids:
+            # Folder walk already covers these files — skip virtual entry
+            continue
+        resolved_entries.append(
+            (parent_id, file_level_library[parent_id], files)
+        )
+
+    print(f"resolved:         {len(folder_walks)} folder walk(s), "
+          f"{sum(1 for _,_,f in resolved_entries if f is not None)} "
+          f"file-level group(s)")
+    print()
+
+    for folder_id, library, prebuilt_files in resolved_entries:
         folder_meta = lookup_folder_in_manifest(manifest, folder_id)
         if folder_meta is None:
             try:
@@ -558,19 +635,29 @@ def run(
                 continue
         folder_meta["folder_id"] = folder_id
 
-        print(f"=== folder: {folder_meta['folder_name']} ===")
-        print(f"  drive:        {folder_meta['drive_slug']}")
-        print(f"  folder_id:    {folder_id}")
-        print(f"  path:         {folder_meta['folder_path']}")
-        print(f"  target lib:   {library}")
+        if prebuilt_files is None:
+            print(f"=== folder: {folder_meta['folder_name']} ===")
+            print(f"  drive:        {folder_meta['drive_slug']}")
+            print(f"  folder_id:    {folder_id}")
+            print(f"  path:         {folder_meta['folder_path']}")
+            print(f"  target lib:   {library}")
+            print(f"  mode:         folder walk")
 
-        try:
-            raw_children = list(drive_client.list_children(folder_id))
-        except Exception as e:
-            print(f"  ERROR: cannot list children: {e}", file=sys.stderr)
-            continue
+            try:
+                raw_children = list(drive_client.list_children(folder_id))
+            except Exception as e:
+                print(f"  ERROR: cannot list children: {e}", file=sys.stderr)
+                continue
 
-        files = [c for c in raw_children if c.get("mimeType") != ingester_config.MIME_FOLDER]
+            files = [c for c in raw_children if c.get("mimeType") != ingester_config.MIME_FOLDER]
+        else:
+            print(f"=== file-level group in: {folder_meta['folder_name']} ===")
+            print(f"  drive:        {folder_meta['drive_slug']}")
+            print(f"  parent_id:    {folder_id}")
+            print(f"  path:         {folder_meta['folder_path']}")
+            print(f"  target lib:   {library}")
+            print(f"  mode:         file-level ({len(prebuilt_files)} file(s))")
+            files = list(prebuilt_files)
         print(f"  files seen:   {len(files)}")
 
         # v2 only handles Google Docs in this session — other types deferred to v3

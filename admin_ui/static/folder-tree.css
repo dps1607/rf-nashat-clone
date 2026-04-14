@@ -327,6 +327,17 @@
   font-style: italic;
 }
 
+/* File rows are readonly (no checkbox). The file-icon span stands in
+   where the checkbox used to sit so the name column stays aligned
+   with folder rows. */
+.file-icon {
+  display: inline-block;
+  width: 1rem;
+  text-align: center;
+  color: var(--gray, #8C8589);
+  flex-shrink: 0;
+}
+
 /* Flat drive message (e.g. 8-labs) */
 .flat-drive-msg {
   padding: 0.5rem 0.75rem 0.5rem 2.75rem;

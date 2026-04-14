@@ -233,36 +233,29 @@
       })(check, childContainer);
 
     } else {
-      // File node — no toggle, just a checkbox and name
+      // File node — displayed readonly for visibility only. Folder-selection
+      // UI must NOT let users check individual files; v2 walks folders via
+      // list_children() and cannot process file IDs. Historical bug: file
+      // rows used to carry a .tree-check, which cascadeDown then swept into
+      // selectionState alongside real folders. Fix: no checkbox on files.
       var spacer = document.createElement('span');
       spacer.className = 'tree-toggle disabled';
       spacer.innerHTML = '&nbsp;';
       node.appendChild(spacer);
 
-      var fcheck = document.createElement('input');
-      fcheck.type = 'checkbox';
-      fcheck.className = 'tree-check';
-      fcheck.dataset.id = item.id;
-      node.appendChild(fcheck);
+      var fileIcon = document.createElement('span');
+      fileIcon.className = 'file-icon';
+      fileIcon.textContent = '\u00B7';  // middle dot — visual leaf marker
+      fileIcon.setAttribute('aria-hidden', 'true');
+      node.appendChild(fileIcon);
 
       var fname = document.createElement('span');
-      fname.className = 'folder-name';
+      fname.className = 'folder-name file-name';
       fname.textContent = item.name;
       node.appendChild(fname);
 
       wrapper.appendChild(node);
-
-      // File checkbox handler
-      (function (chk) {
-        chk.addEventListener('change', function () {
-          if (chk.checked) {
-            selectionState[item.id] = true;
-          } else {
-            delete selectionState[item.id];
-          }
-          updateParentCheck(wrapper.parentElement);
-        });
-      })(fcheck);
+      // No change handler — file rows are not interactive.
     }
 
     return wrapper;
