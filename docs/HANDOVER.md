@@ -2515,3 +2515,99 @@ chroma_db_backup_pre_s21_n39/   (484 MB, deleted at session close per Dan)
 - v3 chunks total: **8** (7 pdf + 1 v2_google_doc) — ALL now have s19 metadata
 - Sugar Swaps chunk: now strip-ON in production (canva.com URL + COVER tag removed, 195 chars)
 - OCR cache: 34 files (unchanged)
+
+
+---
+
+## Session 22 — #31 closed (test_admin_save_endpoint_s16.py snapshot/restore) (2026-04-15)
+
+**Outcome:** BACKLOG #31 closed. The 3-session-old foot-gun is gone. `scripts/test_admin_save_endpoint_s16.py` now snapshots `data/selection_state.json` byte-for-byte before any test runs and restores it (or removes it, if it didn't exist pre-test) in a `finally` block. Session-open Step 0 sub-check 0.4.7 will continue to pass for whatever shape Dan actually has in selection_state at that moment, not for a hardcoded session-16 shape that happens to match. Zero Chroma writes. ~$0 spend (one Vertex auth ping with a max_tokens fix).
+
+### Scope decision
+
+Dan picked Option D (#31 fix) with the "if context permits, also do B (#21 UI redesign)" carve-out. After D landed clean at ~38% context, tech-lead read concluded B was likely drift relative to the build-the-net principle (see Step 2 honest reassessment in s22 transcript) and that finishing handover deliverables was the higher-leverage use of remaining budget. B explicitly NOT done; deferred to a future dedicated UI session.
+
+### Step 0 reality check — all sub-checks PASS
+
+- Repo at `95b5831`, working tree clean
+- `rf_reference_library`: 605 (unchanged)
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc)
+- Metadata coverage: `extraction_method` 8/8, `library_name` 8/8, `source_file_md5` 7/8 (Google Doc empty by Drive-API design), `content_hash` 8/8
+- Sugar Swaps strip-ON in production: len 3737, no canva.com, no COVER tag
+- OCR cache: 34
+- Drive auth, Vertex AI auth, OpenAI auth (3072 dims): all green
+- Test suite: 13/13 scripts green
+- v3 dry-run: 3 files / 9 chunks / `{pdf:1, v2_google_doc:2}` / cache_hit:1 / ~7,603 est_tokens / $0.0010 / `stage1_dedup_skips: []`
+- Admin UI on PID 33126, `Cache-Control: no-store` header confirmed
+- selection_state on disk: s16 shape (folder `18S1Vf...` + file `1oJyks...`, both → rf_reference_library)
+
+**One Step 0 nit (not drift):** The Vertex AI smoke test in the s22 prompt cheat sheet uses `max_output_tokens=5`, which gemini-2.5-flash eats entirely with reasoning tokens (`thoughts_token_count: 2`) before any text emits — `finish_reason: MAX_TOKENS` with empty content. Auth was actually fine; the test was too tight. Bumping to `max_output_tokens=50` returned `'ok'`. The s23 prompt cheat sheet should use 50.
+
+### What shipped — #31 ✅ CLOSED
+
+**The fix:**
+- Snapshot `SEL_PATH.read_bytes()` (or record `_PRE_EXISTED = False`) at top of script, before test client mints
+- Wrap all 6 test blocks in a single `try:` … `finally:` 
+- In `finally`, restore exact pre-test bytes via `write_bytes()`, or `unlink()` if pre-test absent
+- Removed the hardcoded `final = {...}` dict and the misleading "restored to session 16 working state" log line
+
+**Verification (probe pattern):**
+1. Backed up real selection_state to `/tmp/sel_real_s22.json`
+2. Wrote a probe payload to `data/selection_state.json` (`PROBE_FOLDER_S22_DO_NOT_USE` / `PROBE_FILE_S22_DO_NOT_USE` / `PROBE_TIMESTAMP_S22`)
+3. Ran the test → 16/16 PASS, log line confirms 294 bytes restored
+4. Read back `data/selection_state.json`: probe values intact, byte-identical to step 2
+5. Restored real selection_state, ran test once more, MD5 pre = MD5 post (`133e5e970594f4c5f8918353a82b145a`) — round-trip clean
+
+### Files modified
+
+```
+scripts/test_admin_save_endpoint_s16.py   (rewrite: snapshot/restore pattern, try/finally)
+docs/HANDOVER.md                          (this entry)
+docs/BACKLOG.md                           (#31 marked RESOLVED)
+docs/NEXT_SESSION_PROMPT_S23.md           (created — supersedes S22 prompt)
+```
+
+### Files created
+
+```
+docs/NEXT_SESSION_PROMPT_S23.md           (s23 bootstrap prompt, full rules carried)
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes (no need)
+- `ingester/loaders/*` — no scope this session
+- `admin_ui/*`, `rag_server/*` — out of scope (B deferred)
+- `data/selection_state.json` — round-tripped through verification but byte-identical pre/post
+- `docs/STATE_OF_PLAY.md` — not amended (HANDOVER s19/20/21/22 entries supersede; the 5 lessons live in BACKLOG/HANDOVER)
+
+### Session 22 spend
+
+~$0.001 total. Breakdown: ~$0.0001 OpenAI auth smoke (Step 0), ~$0.0001 Vertex auth smoke (Step 0), $0 for the test fix itself (file edit + 2 local test runs).
+
+### Lessons carried forward to session 23
+
+1. **Snapshot/restore is the safer test pattern than hardcoded restore — even when the hardcoded shape "always" matches.** The s16 hardcoded restore happened to match Step 0's expectations every session 17–22, so the foot-gun was invisible until you tried iterating on selection_state. Snapshot/restore is byte-transparent and 10 lines of code.
+2. **The probe verification pattern is cheap and conclusive for restore-correctness fixes.** Backup → write distinctive sentinel → run test → diff → restore. ~5 minutes; no synthetic test or mock framework needed for a test that's about side effects on a real file.
+3. **Step 0 cheat-sheet smoke tests need enough token headroom for reasoning-model overhead.** gemini-2.5-flash burned all 5 tokens on `thoughts_token_count` before emitting any text. `max_output_tokens=50` is a cheap, safe default for any one-token auth ping going forward.
+4. **"Build the safety net before the surface area grows" applies to test infrastructure too.** The selection_state clobber would have bitten a future session that was iterating on UI selections — exactly the kind of work #21 (deferred) eventually requires. Fixing #31 first was correct sequencing for whenever B does land.
+5. **Re-scope honestly when context budget is the binding constraint.** D + B was offered as a budget-fitting bundle; once D landed and tech-lead reread the build-discipline frame, B was honestly drift relative to current strategic priorities. Doing only D + a clean handover was strictly higher leverage than rushing B.
+
+### Open items at session 22 close
+
+- BACKLOG #6b (coaching scrub retrofit) — real liability, untouched, raised priority since s15
+- BACKLOG #18 (`format_context()` migration to canonical display fields) — half of the retrofit bundle
+- BACKLOG #17 (display_subheading normalization) — bundle with #18 + #6b + #20
+- BACKLOG #20 (inline citation prompting) — untouched, bundle candidate with #18
+- BACKLOG #21 (folder-selection UI redesign) — untouched, dedicated UI session
+- BACKLOG #35 (CONTENT_SOURCES.md) — gates bulk content ingestion; not needed until ingestion of new domains resumes
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — gated on #35
+- Next v3 handler (plaintext / slides / sheets / images / av) — handler work is unblocked per s18 logic, but each new handler increases retrofit surface; tech-lead recommendation is to land one retrofit pass first
+- STATE_OF_PLAY session 19/20/21/22 amendments — still deferred (HANDOVER captures everything)
+
+### Chroma state at end of session 22 (UNCHANGED from session 21 close)
+
+- `rf_reference_library`: **605 chunks** (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

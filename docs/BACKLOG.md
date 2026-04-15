@@ -926,8 +926,12 @@ that touches the chunk metadata writers.
 
 ---
 
-### 31. `test_admin_save_endpoint_s16.py` clobbers `data/selection_state.json`
-**Priority:** Low. Side effect, not a bug per se.
+### 31. `test_admin_save_endpoint_s16.py` clobbers `data/selection_state.json` — RESOLVED session 22 — ✅ RESOLVED
+**Priority:** Closed.
+
+**Closure (session 22):** Rewrote the test to snapshot `data/selection_state.json` byte-for-byte before any test runs (or record `_PRE_EXISTED = False` if absent) and restore (or `unlink()`) in a `finally` block. Removed the hardcoded `final = {...}` dict and the misleading "restored to session 16 working state" log line. Probe-verified end-to-end: backed up real state → wrote `PROBE_FOLDER_S22_DO_NOT_USE` sentinel → ran test → confirmed 16/16 PASS and probe values intact post-restore → restored real state, MD5 round-trip identical. The hardcoded restore happened to coincide with Step 0 expectations every session 17–22, which made the foot-gun invisible until you tried iterating on selection_state — snapshot/restore is now byte-transparent.
+
+**Original scope (now historical):**
 
 **Scope:** When `scripts/test_admin_save_endpoint_s16.py` runs, it ends with
 the line:
