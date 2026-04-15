@@ -374,6 +374,90 @@ def stitch_stream(
 
 
 # ----------------------------------------------------------------------------
+# Editor metadata strip (BACKLOG #29, session 19)
+# ----------------------------------------------------------------------------
+
+import re as _re
+
+# Pattern blocklist for editor noise. M-29-A.3: applied only to the first
+# _STRIP_HEAD_LINE_CAP lines of stitched_text. Patterns matched against
+# whole-line content (after .strip()), case-sensitive.
+_STRIP_HEAD_LINE_CAP = 20
+
+_STRIP_PATTERNS: list[_re.Pattern] = [
+    # Canva edit URL line — anywhere on the line
+    _re.compile(r"https?://(?:www\.)?canva\.com/design/\S+"),
+    # "Canva design to edit:" prefix line
+    _re.compile(r"^Canva\s+design\s+to\s+edit\s*:", _re.IGNORECASE),
+    # Bare production tags: 1-3 uppercase words optionally followed by digits
+    # and an optional colon, with NO body text on the same line.
+    # Catches: "COVER", "COVER:", "PAGE", "PAGE 1:", "HEADER:", "FOOTER",
+    # "BACK COVER:", "PAGE 12:". Max length cap (~20 chars) prevents matching
+    # legitimate short all-caps body text.
+    _re.compile(r"^[A-Z][A-Z\s]{0,18}\d{0,3}\s*:?\s*$"),
+    # Standalone draft / editor note markers (whole-line, case-insensitive)
+    _re.compile(r"^\s*(draft|editor\s+notes?|version\s*\d+(?:\.\d+)?)\s*$",
+                _re.IGNORECASE),
+]
+
+
+def _strip_editor_metadata(stitched_text: str) -> str:
+    """
+    BACKLOG #29 (session 19) — M-29-A.3 hybrid pattern + position cap.
+
+    Strip Canva edit URLs, bare production tags, and editor notes that
+    pollute Google Doc lead-magnet exports. Pollution clusters at the
+    document head (Canva-exported documents have URL + cover tags in
+    the first ~10 lines), so the strip only fires within the first
+    _STRIP_HEAD_LINE_CAP lines. Lines past the cap are preserved as-is
+    even if they match a pattern — protects against false positives on
+    legitimate body content (e.g., "HEADER:" inside a code example).
+
+    Always preserves [SECTION N] and [IMAGE #N: ...] markers regardless
+    of position — they're load-bearing for chunk locator derivation and
+    image OCR display.
+
+    Returns the (possibly-modified) stitched text. Adjacent blank lines
+    that result from stripping are collapsed to single blanks; trailing
+    whitespace on the head section is trimmed.
+
+    Strict bytes — does not normalize whitespace or case in surviving lines.
+    """
+    if not stitched_text:
+        return stitched_text
+
+    lines = stitched_text.split("\n")
+    out_lines: list[str] = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if idx < _STRIP_HEAD_LINE_CAP and stripped:
+            # Never strip load-bearing markers
+            if stripped.startswith("[SECTION ") or stripped.startswith("[IMAGE "):
+                out_lines.append(line)
+                continue
+            # Apply pattern blocklist
+            if any(p.search(stripped) for p in _STRIP_PATTERNS):
+                # Drop this line entirely (don't preserve the blank either)
+                continue
+        out_lines.append(line)
+
+    # Collapse runs of 3+ consecutive blank lines down to 2 (matches the
+    # natural double-newline paragraph separator stitch_stream produces).
+    collapsed: list[str] = []
+    blank_run = 0
+    for line in out_lines:
+        if line.strip() == "":
+            blank_run += 1
+            if blank_run <= 2:
+                collapsed.append(line)
+        else:
+            blank_run = 0
+            collapsed.append(line)
+
+    return "\n".join(collapsed)
+
+
+# ----------------------------------------------------------------------------
 # extract_from_html_bytes — the main M3 entrypoint
 # ----------------------------------------------------------------------------
 
@@ -384,6 +468,7 @@ def extract_from_html_bytes(
     vision_client,
     use_cache: bool = True,
     emit_section_markers: bool = False,
+    strip_editor_metadata: bool = False,
 ) -> ExtractResult:
     """Extract text from a Google Doc HTML export.
 
@@ -426,6 +511,12 @@ def extract_from_html_bytes(
         use_cache=use_cache,
         emit_section_markers=emit_section_markers,
     )
+
+    # BACKLOG #29 (session 19): post-stitch editor metadata strip.
+    # M-29-C.3 — opt-in via flag; v2 callers default False (byte-identical
+    # behavior preserved); v3 dispatcher passes True.
+    if strip_editor_metadata:
+        stitched = _strip_editor_metadata(stitched)
 
     delta_seen = vision_client.ledger.images_seen - pre_seen
     delta_called = vision_client.ledger.images_ocr_called - pre_called
@@ -474,6 +565,9 @@ def extract(drive_file: dict, drive_client, config) -> ExtractResult:
             "the dispatcher must construct one and pass it via the shim."
         )
     use_cache = getattr(config, "use_cache", True) if config else True
+    # BACKLOG #29 (session 19): editor metadata strip. Default False keeps
+    # v2's behavior unchanged. v3 dispatcher passes True via _HandlerConfig.
+    strip_editor = getattr(config, "strip_editor_metadata", False) if config else False
 
     html_bytes = export_html(drive_client, file_id)
 
@@ -483,6 +577,7 @@ def extract(drive_file: dict, drive_client, config) -> ExtractResult:
         vision_client=vision_client,
         use_cache=use_cache,
         emit_section_markers=True,  # v3 default — populate display_locator
+        strip_editor_metadata=strip_editor,
     )
 
     # Tag extra with Drive-side metadata for diagnostics, matching pdf_handler

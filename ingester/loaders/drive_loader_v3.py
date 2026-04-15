@@ -36,6 +36,7 @@ Hard rules:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -143,6 +144,54 @@ class HandlerNotAvailable(Exception):
 # Per-file dispatch
 # ----------------------------------------------------------------------------
 
+def _compute_content_hash(stitched_text: str) -> str:
+    """
+    BACKLOG #23 (session 19): SHA256 hex digest of post-extraction stitched_text.
+    Strict-byte hash (no whitespace normalization) — detects even trivial edits.
+    Empty string returns the SHA256 of empty bytes (a valid, deterministic value).
+    """
+    return hashlib.sha256(stitched_text.encode("utf-8")).hexdigest()
+
+
+def _check_dedup(
+    collection,
+    *,
+    content_hash: str,
+    current_file_id: str,
+) -> Optional[str]:
+    """
+    BACKLOG #23 (session 19) — Stage 2 dedup.
+
+    Query `collection` for existing chunks with matching `content_hash`. If a
+    match exists for a *different* file_id, return that file_id (caller will
+    skip the current file's chunks). If no match, or only same-file_id match
+    (legitimate re-ingest via upsert), return None.
+
+    Per-collection scope (M-23-B.1): caller passes the target collection.
+    Cross-collection collisions are not flagged.
+
+    Same-file_id self-match is intentionally allowed: re-ingesting a file
+    overwrites its chunks via upsert, which is the expected behavior.
+    """
+    if not content_hash:
+        return None
+    try:
+        result = collection.get(
+            where={"content_hash": content_hash},
+            limit=10,
+        )
+    except Exception:
+        # Defensive: if Chroma rejects the where clause for any reason
+        # (e.g., field doesn't exist on any chunk yet), treat as no match.
+        return None
+    metadatas = result.get("metadatas") or []
+    for m in metadatas:
+        existing_file_id = (m or {}).get("source_file_id", "")
+        if existing_file_id and existing_file_id != current_file_id:
+            return existing_file_id
+    return None
+
+
 def _dispatch_file(
     drive_file: dict,
     drive_client: DriveClient,
@@ -179,6 +228,10 @@ def _dispatch_file(
         cfg = _HandlerConfig()
         cfg.vision_client = vision_client
         cfg.use_cache = True
+        # BACKLOG #29 (session 19): v3 always strips Canva/editor metadata
+        # from Google Doc extraction. v2 still passes nothing → default
+        # False → byte-identical to pre-session-19 v2 behavior.
+        cfg.strip_editor_metadata = True
         result = google_doc_handler.extract(drive_file, drive_client, cfg)
         return category, result
 
@@ -614,9 +667,16 @@ def run(
             "modified_time": df.get("modifiedTime", ""),
             "size": int(df.get("size", 0) or 0),
             "web_view_link": df.get("webViewLink", ""),
+            # BACKLOG #23 (session 19): md5Checksum for stage-1 dedup.
+            # None for native Google Docs (Drive doesn't compute it).
+            "md5_checksum": df.get("md5Checksum") or "",
         }
 
         chunks = chunk_with_locators(result.stitched_text)
+        # BACKLOG #23 (session 19): Stage 2 dedup hash. Computed once per file
+        # and written to every chunk of that file. Strict-byte SHA256 of
+        # post-extraction stitched_text. Used by _check_dedup() at commit time.
+        file_content_hash = _compute_content_hash(result.stitched_text)
         per_file_chunk_counts.append({
             "file_id": file_record["id"],
             "file_name": file_record["name"],
@@ -646,7 +706,17 @@ def run(
             # Handler provenance for run record / debugging
             base_meta["v3_category"] = pf["category"]
             base_meta["v3_extraction_method"] = result.extraction_method
+            # BACKLOG #30 (session 19): extraction_method is the canonical key
+            # consumed by per-type cost rollups (D5) and #18's chunk_to_display().
+            # v3_extraction_method is the deprecated alias retained until legacy
+            # v3 chunks (8 at session 19 close) are re-ingested.
+            base_meta["extraction_method"] = result.extraction_method
             base_meta["source_unit_label"] = result.source_unit_label or ""
+            # BACKLOG #23 (session 19): per-chunk content_hash for stage-2 dedup.
+            # Same value across all chunks of one file (file-level hash, not
+            # per-chunk hash) — _check_dedup() needs the file-level value to
+            # detect duplicate-content files regardless of chunk boundaries.
+            base_meta["content_hash"] = file_content_hash
 
             cid = build_chunk_id(
                 folder_meta["drive_slug"], file_record["id"], chunk["chunk_index"]
@@ -816,10 +886,50 @@ def run(
             name=library,
             embedding_function=ef,
         )
+
+        # BACKLOG #23 (session 19): Stage 2 dedup. Group this library's chunks
+        # by source_file_id, run one _check_dedup() per file (not per chunk),
+        # drop all chunks for files whose content_hash already exists in this
+        # collection under a different file_id.
+        chunks_by_file: dict[str, list[dict]] = {}
+        for c in chunks_for_lib:
+            fid = c["metadata"].get("source_file_id", "")
+            chunks_by_file.setdefault(fid, []).append(c)
+
+        kept_chunks: list[dict] = []
+        deduped_files: list[tuple[str, str, str]] = []  # (file_id, file_name, existing_file_id)
+        for fid, file_chunks in chunks_by_file.items():
+            sample_meta = file_chunks[0]["metadata"]
+            ch = sample_meta.get("content_hash", "")
+            existing_fid = _check_dedup(
+                collection,
+                content_hash=ch,
+                current_file_id=fid,
+            )
+            if existing_fid:
+                deduped_files.append((
+                    fid,
+                    sample_meta.get("source_file_name", "?"),
+                    existing_fid,
+                ))
+                continue
+            kept_chunks.extend(file_chunks)
+
+        if deduped_files:
+            print(f"    dedup ledger:")
+            print(f"      files_deduped:    {len(deduped_files)}")
+            print(f"      chunks_dropped:   {len(chunks_for_lib) - len(kept_chunks)}")
+            for fid, fname, existing in deduped_files:
+                print(f"      - {fname!r} (file_id={fid}) → matches existing file_id={existing}")
+
+        if not kept_chunks:
+            print(f"    nothing to upsert after dedup, skipping library")
+            continue
+
         pre_count = collection.count()
-        ids = [c["id"] for c in chunks_for_lib]
-        docs = [c["text"] for c in chunks_for_lib]
-        metas = [c["metadata"] for c in chunks_for_lib]
+        ids = [c["id"] for c in kept_chunks]
+        docs = [c["text"] for c in kept_chunks]
+        metas = [c["metadata"] for c in kept_chunks]
         collection.upsert(ids=ids, documents=docs, metadatas=metas)
         post_count = collection.count()
         print(f"    count before: {pre_count}")

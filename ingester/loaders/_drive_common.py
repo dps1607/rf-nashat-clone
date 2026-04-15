@@ -259,6 +259,11 @@ def build_metadata_base(
         # Provenance
         "source_pipeline": source_pipeline,
         "source_collection": library,
+        # BACKLOG #30 (session 19): library_name is the canonical key consumed
+        # by format_context() and #18's chunk_to_display(). source_collection
+        # is the deprecated alias retained for back-compat with v1/v2 chunks
+        # already in Chroma. Remove after legacy chunks are re-ingested.
+        "library_name": library,
         "source_drive_slug": folder_record["drive_slug"],
         "source_drive_id": folder_record["drive_id"],
         "source_folder_id": folder_record["folder_id"],
@@ -269,6 +274,11 @@ def build_metadata_base(
         "source_file_modified_time": file_record.get("modified_time") or "",
         "source_file_size_bytes": file_record.get("size") or 0,
         "source_web_view_link": file_record.get("web_view_link") or "",
+        # BACKLOG #23 (session 19): Drive's md5Checksum for binary files.
+        # Empty string for native Google Docs (Drive doesn't compute md5 for them).
+        # Used for stage-1 (pre-extraction) dedup. Stage 2 (post-extraction
+        # content_hash) is set in the per-chunk loop in drive_loader_v3.
+        "source_file_md5": file_record.get("md5_checksum") or "",
         # Run identity
         "ingest_run_id": ingest_run_id,
         "ingest_timestamp_utc": ingest_timestamp_utc,

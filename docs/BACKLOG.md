@@ -706,7 +706,10 @@ correct. This is the simpler path.
 
 ---
 
-### 23. Content-hash dedup at v3 commit time
+### 23. Content-hash dedup at v3 commit time — STAGE 2 RESOLVED session 19
+**Priority:** Medium.
+
+**Status:** ✅ Stage 2 (post-extraction `content_hash` check) shipped session 19. Stage 1 (pre-extraction md5 fast path) deferred → BACKLOG #37. — ✅ STAGE 2 RESOLVED in session 19, Stage 1 → #37
 **Priority:** Medium.
 
 **Scope:** v3 currently dedupes by chunk_id (`drive:{slug}:{file_id}:{chunk_index}`).
@@ -848,7 +851,7 @@ file's preamble.
 These items are wake from session 17 (BACKLOG #11 closure). Captured here so
 future sessions can pick them up cold.
 
-### 29. Strip Canva and editor metadata from Google Doc extraction
+### 29. Strip Canva and editor metadata from Google Doc extraction — RESOLVED session 19 (code), A/B test → #38 — ✅ CODE RESOLVED in session 19, A/B verification → #38
 **Priority:** Medium. Pre-existing in v2; surfaced again by session 17 pilot.
 
 **Scope:** When v3's google_doc_handler extracts content from real lead-magnet
@@ -886,7 +889,7 @@ known-good query improves (or at least doesn't regress) after the strip.
 
 ---
 
-### 30. v3 metadata writer drops `extraction_method` and `library_name`
+### 30. v3 metadata writer drops `extraction_method` and `library_name` — RESOLVED session 19 — ✅ RESOLVED in session 19
 **Priority:** Medium. Observation; non-blocking but worth fixing during the
 retrofit bundle session (#18).
 
@@ -1052,3 +1055,57 @@ Dan decides the mappings; Claude documents. Becomes the input to selection decis
 
 **Until resolved:** the docx handler stays wired, but no blog-form docx files get committed. The pilot record at `data/ingest_runs/e1f02930bb104928.dry_run.json` documents what would have been written.
 
+
+
+## NEW — added session 19
+
+### 37. Stage 1 (pre-extraction md5) dedup
+**Priority:** Low-Medium. Stage 2 (session 19) already catches the documented near-term cases.
+
+**Scope:** Session 19 landed BACKLOG #23 stage-2 only (post-extraction `content_hash` check). Stage 1 (pre-extraction `source_file_md5` check, fast path that skips extraction entirely for binary-file dups) was deferred because it requires instantiating the Chroma client before the extraction loop runs, which is a non-trivial refactor of v3's commit/dry-run separation.
+
+**Why deferred:** with vision OCR caching deployed in session 17, extraction cost on a re-upload is ~$0 anyway, so stage 1 is mostly cosmetic for the current corpus. The fields needed (`source_file_md5`) are already written to per-chunk metadata by session 19's code; only the query logic and the early-return are missing.
+
+**Action when resumed:**
+1. Refactor: instantiate `chroma_client` at the top of `run()` so it's available in both dry-run (read-only) and commit (read+write) modes.
+2. Add stage-1 check inside the extraction loop, before `_dispatch_file()`. If `df.get("md5Checksum")` is non-empty AND a chunk in the target collection has matching `source_file_md5` AND `source_file_id != current_file_id` → log skip, increment a new `files_deduped` counter in the run record, continue.
+3. Update dry-run summary to include a stage-1 dedup ledger.
+4. Add tests to `test_dedup_synthetic_s19.py` for the stage-1 path.
+
+**Estimated effort:** ~2 hours including the Chroma-client-up-top refactor + tests + v3 dry-run regression.
+
+---
+
+### 38. Live A/B retrieval-similarity test on Sugar Swaps Canva strip
+**Priority:** Low-Medium. Code already proven via 15/15 synthetic tests; this is corroboration.
+
+**Scope:** Session 19 landed `_strip_editor_metadata()` and verified it via synthetic tests against hand-crafted fixtures matching the documented Sugar Swaps pollution patterns. The BACKLOG #29 directive also called for a live A/B retrieval-similarity test on the actual Sugar Swaps chunk in `rf_reference_library`. That test was deferred because session 19's context budget was consumed by the three-item bundle.
+
+**Action when resumed:**
+1. Re-extract Sugar Swaps from Drive via dry-run (vision cache hit, $0).
+2. Embed the strip-on stitched_text via OpenAI `text-embedding-3-large` (~$0.0005).
+3. Embed the strip-off stitched_text via the same call.
+4. Embed 2-3 known-good fertility queries (e.g., "sugar substitutes for fertility", "how does sugar affect hormones").
+5. Compute cosine similarity for each (chunk-version × query) pair.
+6. Report: `query_text → before_sim, after_sim, delta`. Expected: small positive delta on Sugar Swaps (less noise embedded → tighter match).
+
+**Estimated effort:** ~30 min, ~$0.001 spend.
+
+**Note:** the only currently-affected chunk in the corpus is Sugar Swaps (n=1). Honest small-N report. The 13 v2 DFH Google Doc chunks have no Canva pollution and would not change under the strip — synthetic tests already prove they're unaffected.
+
+---
+
+### 39. Backfill new s19 metadata fields on existing v3 chunks
+**Priority:** Low. Cosmetic until a feature relies on the new keys being present on all chunks.
+
+**Scope:** Session 19 added four new metadata fields to the v3 per-chunk metadata builder:
+- `library_name` (canonical alias of `source_collection`, #30)
+- `extraction_method` (canonical alias of `v3_extraction_method`, #30)
+- `source_file_md5` (Drive md5Checksum, #23 stage-1 plumbing)
+- `content_hash` (post-extraction stitched_text SHA256, #23 stage-2)
+
+Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 PDF + 1 v2_google_doc as of session 17) were NOT backfilled. They still have only the deprecated keys. New chunks written from session 20+ onward will have all four fields populated.
+
+**Action when resumed:** re-ingest the 8 existing v3 chunks (DFH folder + Sugar Swaps + Egg Health Guide). Upsert behavior overwrites in place — no orphans. Spend: ~$0.001 embeddings.
+
+**Bundle with:** any session that runs a full v3 commit on these files for other reasons (e.g., when Sugar Swaps gets re-ingested with the Canva strip applied).

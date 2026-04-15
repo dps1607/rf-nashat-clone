@@ -1,65 +1,52 @@
-# NEXT SESSION PROMPT — session 19
+# NEXT SESSION PROMPT — session 20
 
 > **⚠ READ THIS FIRST, BEFORE ANY READING LIST**
 >
-> Every session 9 onward has used a Step 0 reality check before doing any work. It has paid for itself every single time. Session 14 missed a dirty working tree. Session 16 surfaced four pre-existing UI bugs. Session 17 caught a poor pilot file pick before any commit. Session 18 confirmed the docx handler shipped clean — but also surfaced a content-strategy gap that pivots session 19's scope away from new handlers and toward dedup + content quality. **Session 19 must run Step 0 in full.**
+> Step 0 has paid for itself every session 9 onward. Session 19 used it to confirm session 18's docx handler hadn't drifted, all auths were live, and v3 dry-run still produced 9 chunks at $0.0010. **Session 20 must run Step 0 in full.**
 
 ---
 
 ## Step 0 — Tool and reality check (mandatory, ~5 minutes)
 
-Before reading anything else, run all gates. Stop and tell Dan if anything surprises you.
-
 ### 0.1 — Tools
 
 1. **Tool enumeration.** Need `Desktop Commander:start_process` + `interact_with_process` + `read_file` + `write_file` + `edit_block` + `start_search`. If only a partial DC toolset is visible, call `tool_search` with a relevant query to force-load the rest.
 
-2. **Smoke test process execution.** Run `python3 -i`, verify `>>>` prompt, send `print("session 19 ok"); 2+2`. Expect `session 19 ok` and `4`.
+2. **Smoke test process execution.** Run `python3 -i`, verify `>>>` prompt, send `print("session 20 ok"); 2+2`. Expect `session 20 ok` and `4`.
 
 ### 0.2 — Repo state
 
 3. **Repo state.** `cd /Users/danielsmith/Claude\ -\ RF\ 2.0/rf-nashat-clone && git status && git log --oneline -10`.
-   - **Expected top commit: a single session 18 commit** landing the docx handler (new module + new test + v3 dispatcher edits + requirements.txt + 4 doc updates + 4 new BACKLOG items #33-#36 + no Chroma writes).
-   - Below session 18: session 17 (`93efce3`), session 16 (`98f8011`), session 15 (`d0c381f`), etc.
-   - **Working tree must be completely clean.** If `git status` shows ANY modified or untracked files, STOP and surface them. (Session 14 lesson.)
+   - **Expected top commit: a single session 19 commit** landing the dedup helpers + Canva strip + #30 metadata writer fix + 3 new test scripts (29 individual tests across them) + 3 doc updates + 3 new BACKLOG items #37-#39 + no Chroma writes.
+   - Below session 19: session 18 (`1c12155`), session 17 (`93efce3`), session 16 (`98f8011`), etc.
+   - **Working tree must be completely clean.** If `git status` shows ANY modified or untracked files, STOP and surface them.
 
 ### 0.3 — Data plane reality
 
 4. **Reality-vs-prompt check.** Verify these against the actual filesystem:
 
-   - **Chroma baseline.** `rf_reference_library` should still be **605** (unchanged from session 17 close — session 18 had zero Chroma writes). If 604 or lower, session 17 commit rolled back — stop. If 606+, something wrote between sessions — stop and check what.
+   - **Chroma baseline.** `rf_reference_library` should still be **605** (unchanged from session 17 close — sessions 18 and 19 had zero Chroma writes). If 604 or lower, an unexpected delete happened — stop. If 606+, something wrote between sessions — stop and check what.
 
      ```bash
      ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); print('rf_reference_library:', col.count())"
      ```
 
-   - **v3 chunks queryable.** Should still return **8 chunk IDs**: 7 PDF (Egg Health Guide, session 16) + 1 v2_google_doc (Sugar Swaps Guide, session 17). **Zero docx chunks** — session 18 wired the handler but committed nothing.
+   - **v3 chunks queryable.** Should still return **8 chunk IDs**: 7 PDF + 1 v2_google_doc. **Zero docx chunks.** **None of the 8 have the new s19 metadata fields** (`extraction_method`, `library_name`, `source_file_md5`, `content_hash`) populated yet — backfill is BACKLOG #39.
 
      ```bash
-     ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); r=col.get(where={'source_pipeline':'drive_loader_v3'}, limit=30); cats=[m.get('v3_category','?') for m in r['metadatas']]; print('v3 chunks:', len(r['ids']), 'by category:', {c: cats.count(c) for c in set(cats)})"
+     ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); r=col.get(where={'source_pipeline':'drive_loader_v3'}, limit=30); cats=[m.get('v3_category','?') for m in r['metadatas']]; print('v3:', len(r['ids']), {c: cats.count(c) for c in set(cats)})"
      ```
-     Expected: `v3 chunks: 8 by category: {'pdf': 7, 'v2_google_doc': 1}`. If a 'docx' category appears, an unintended commit happened — stop and investigate.
+     Expected: `v3: 8 {'pdf': 7, 'v2_google_doc': 1}`. Identical to session 18/19 close.
 
-   - **v2-ingested chunks still queryable.** Still 13 (session 14 unchanged), at least 3 with `name_replacements >= 1`.
+   - **OCR cache.** `ls data/image_ocr_cache/*.json | wc -l` → likely **34** (unchanged — no new images OCR'd in session 19).
 
-   - **OCR cache.** `ls data/image_ocr_cache/*.json | wc -l` → likely **34** (29 baseline + 5 from the session 18 blogs pilot images). Could be different if cache deduplication kicked in. Anything between 29 and 36 is fine. Outside that range, investigate.
+   - **Drive auth.** Same command as session 19 — expect `OK rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`.
 
-   - **Drive auth.**
-     ```bash
-     export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json
-     ./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"
-     ```
-     Expected: `OK rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`.
+   - **Vertex AI auth.** Same command — expect `ok`.
 
-   - **Vertex AI auth.**
-     ```bash
-     ./venv/bin/python -c "from google import genai; c = genai.Client(vertexai=True, project='rf-rag-ingester-493016', location='us-central1'); print(c.models.generate_content(model='gemini-2.5-flash', contents='Say ok and nothing else.').text)"
-     ```
-     Expected: `ok`.
+   - **OpenAI auth (live).** Source `.env` in subshell, minimal `embeddings.create("test")` returning 3072 dims.
 
-   - **OpenAI auth (live, not just presence).** Source `.env` in a subshell (`set -a && . ./.env && set +a`), then a minimal `embeddings.create("test")` call returning 3072 dims. Never read `.env` contents into chat.
-
-   - **Test suite — all 9 scripts must be green** (session 18 added the docx synthetic).
+   - **Test suite — all 12 scripts must be green** (session 19 added 3: v3_metadata_writer_s19, dedup_synthetic_s19, canva_strip_synthetic_s19):
      ```bash
      ./venv/bin/python scripts/test_scrub_s13.py                       # 19/19
      ./venv/bin/python scripts/test_scrub_wiring_s13.py                # PASS
@@ -69,45 +56,37 @@ Before reading anything else, run all gates. Stop and tell Dan if anything surpr
      ./venv/bin/python scripts/test_admin_save_endpoint_s16.py         # 16/16
      ./venv/bin/python scripts/test_google_doc_handler_synthetic.py    # 9/9
      GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json ./venv/bin/python scripts/test_scrub_v3_handlers.py  # 2/2
-     ./venv/bin/python scripts/test_docx_handler_synthetic.py          # 12/12 (NEW session 18)
+     ./venv/bin/python scripts/test_docx_handler_synthetic.py          # 12/12
+     ./venv/bin/python scripts/test_v3_metadata_writer_s19.py          # 4/4 (NEW s19)
+     ./venv/bin/python scripts/test_dedup_synthetic_s19.py             # 10/10 (NEW s19)
+     ./venv/bin/python scripts/test_canva_strip_synthetic_s19.py       # 15/15 (NEW s19)
      ```
-     **Note:** `test_admin_save_endpoint_s16.py` clobbers `data/selection_state.json` (BACKLOG #31). Restore AFTER the test, not before, if you depend on the file.
 
-   - **v1 regression.** v1 still works for the original pilot.
-     ```bash
-     ./venv/bin/python -m ingester.loaders.drive_loader \
-       --selection-file /tmp/rf_pilot_selection.json \
-       --folder-id 1rOvLMMC4uiC9w60Kc3s4oUEc-SGxNj54 \
-       --dry-run 2>&1 | tail -15
-     ```
-     Expect `files ingested: 1`, 2 low-yield skips. If `/tmp/rf_pilot_selection.json` no longer exists (reboot wiped `/tmp/`), recreate it from HANDOVER session 10.
+   - **v1 regression.** `files ingested: 1`, 2 low-yield skips (unchanged).
 
-   - **v2 regression.** Must be byte-identical to session 16/17 baseline.
-     ```bash
-     ./venv/bin/python -m ingester.loaders.drive_loader_v2 --dry-run 2>&1 | tail -20
-     ```
-     Expected: 2 files seen, 2 ingested, 1 vision_cache_hit, 0 errors, ~1,303 est_tokens, $0.0002.
+   - **v2 regression.** Must be byte-identical to session 16/17/18/19 baseline: 2 files, 2 chunks, 1 vision_cache_hit, ~1,303 est_tokens, $0.0002.
 
    - **v3 regression.** Default selection_state should resolve to DFH folder + Egg Health Guide PDF.
      ```bash
-     ./venv/bin/python -m ingester.loaders.drive_loader_v3 --dry-run 2>&1 | tail -30
+     ./venv/bin/python -m ingester.loaders.drive_loader_v3 --dry-run 2>&1 | tail -25
      ```
-     Expected: 3 files enumerated, 3 processed OK, 0 quarantined, 9 chunks projected (1+1+7), `by_handler={pdf: 1, v2_google_doc: 2}`, $0 vision cost (cache hit), ~$0.0010 projected total. **Identical to session 17 baseline.**
+     Expected: 3 files, 9 chunks, `by_handler={pdf: 1, v2_google_doc: 2}`, $0 vision (cache), ~$0.0010 projected total. **est_tokens should be ~7,603 (NOT 7,605)** — that 2-token delta is the Canva strip removing pollution from Sugar Swaps. If you see ~7,605 the strip didn't fire — investigate.
 
-### 0.4 — Admin UI sanity (session 16 gate, still in effect)
+### 0.4 — Admin UI sanity (session 16 gate)
 
-5. **Admin UI process state.** `lsof -iTCP:5052 -sTCP:LISTEN -P -n`. If a Python process is listening, verify it's running session-18 code (modification time of working files matches disk). If no process, start a fresh one with `nohup ./venv/bin/python -m admin_ui.app > /tmp/rf_s19_admin_ui.log 2>&1 & disown`.
+5. **Admin UI process state.** `lsof -iTCP:5052 -sTCP:LISTEN -P -n`. If a Python process is listening, it's the session 18 process — fine; admin_ui code didn't change in s19. If no process, start a fresh one with `nohup ./venv/bin/python -m admin_ui.app > /tmp/rf_s20_admin_ui.log 2>&1 & disown`.
 
-6. **HTML cache disable hook is active.** `curl -sI http://localhost:5052/admin/folders | grep -i 'cache-control\|location'`. Expect `Cache-Control: no-store` header.
+6. **Cache header active.** `curl -sI http://localhost:5052/admin/folders | grep -i 'cache-control\|location'`. Expect `Cache-Control: no-store`.
 
-7. **Selection state on disk has the session 16/17 default shape.** `cat data/selection_state.json`. Should be the DFH folder + Egg Health Guide PDF assignment, two-bucket shape with `selected_folders`, `selected_files`, `library_assignments`, `timestamp`.
+7. **Selection state on disk.** `cat data/selection_state.json`. Should be the DFH folder + Egg Health Guide PDF assignment, two-bucket shape.
 
 ### 0.5 — Final reality summary
 
 8. **Print a one-line state summary** to confirm Step 0 passed:
    ```
    ✓ Step 0 PASS — repo at <hash>, rf_reference_library: 605, v3: 8 (7 pdf + 1 v2_google_doc + 0 docx),
-     OCR cache: ~34, all 9 test scripts green, admin UI on PID <pid>, selection_state v2 shape OK
+     OCR cache: 34, all 12 test scripts green, admin UI on PID <pid>, selection_state v2 shape OK,
+     v3 dry-run shows ~7,603 est_tokens (Canva strip active)
    ```
 
 If anything in 0.1–0.5 fails, **STOP and surface the failure to Dan before reading any further or doing any work.**
@@ -116,68 +95,56 @@ If anything in 0.1–0.5 fails, **STOP and surface the failure to Dan before rea
 
 ## Step 1 — Read context (~5 minutes)
 
-After Step 0 passes, read these in this order. Don't read more than necessary.
+After Step 0 passes, read these in this order:
 
-1. **`docs/STATE_OF_PLAY.md` — session 18 amendment** (the bottom section, ~70 lines). Tells you the state of the world coming into session 19 and why scope pivoted away from new handlers.
+1. **`docs/HANDOVER.md` — session 19 entry** (the bottom section, ~150 lines). Tells you what shipped (#30 done, #23 stage-2 done with stage-1 deferred to #37, #29 code done with A/B deferred to #38), why backfill of existing chunks was deferred (#39), and the M-options selected for each design decision.
 
-2. **`docs/HANDOVER.md` — session 18 entry** (the bottom section, ~170 lines). Tells you what shipped, what didn't, why the blogs commit was deferred, and the lessons.
+2. **`docs/BACKLOG.md` — items #37, #38, #39 (new s19), plus #35 (still untouched), and #21 (the long-standing folder-selection UI redesign).** These are the candidates for session 20 scope.
 
-3. **`docs/BACKLOG.md` — items #29, #30, #23, plus #33-#36** (the new session 18 wake). These are the candidates for session 19 scope.
+3. **Optionally:** `docs/STATE_OF_PLAY.md` session 18 amendment (still the most recent — session 19 did not amend STATE_OF_PLAY to save context). HANDOVER session 19 captures everything STATE_OF_PLAY would have.
 
 ---
 
 ## Step 2 — Scope decision (Dan picks)
 
-**Session 19 pivots away from new handlers and toward content quality + dedup infrastructure.** Three options:
+Several reasonable directions for session 20. Tech-lead recommendation at the bottom.
 
-### Option A — The dedup + quality bundle (TECH-LEAD RECOMMENDATION)
+### Option A — The deferred s19 trio (#37 + #38 + #39)
 
-**Bundles three items that compound:**
-- **BACKLOG #23 (content-hash dedup)** — pre-write filter in v3's commit path. Idempotent: re-ingesting an already-committed file becomes a no-op. Catches filesystem duplicates and re-runs.
-- **BACKLOG #29 (Canva editor metadata strip)** — `_strip_editor_metadata()` post-pass in `google_doc_handler` removing Canva edit URLs, production tags (`COVER:`, `PAGE 1:`, etc.), draft notes. A/B retrieval-similarity test on the 14 existing Google Doc chunks (no Chroma writes).
-- **BACKLOG #30 (extraction_method/library_name not written to Chroma)** — fix in v3's per-chunk metadata builder. Affects all v3 chunks (PDF + Google Doc + future docx).
+Land everything session 19 deferred. Three small items that compound:
+- **#39 (re-ingest the 8 existing v3 chunks)** — populates the new s19 metadata fields on all chunks. ~$0.001. Requires Dan's OK on a Chroma write (it's an upsert in place, no orphans, no deletions).
+- **#38 (A/B retrieval test on Sugar Swaps Canva strip)** — corroborates the synthetic test results with live retrieval similarity numbers. ~$0.001.
+- **#37 (Stage 1 dedup)** — Chroma-client-up-top refactor + pre-extraction md5 check. ~2 hours, no spend, no Chroma writes (read-only query).
 
-**Why bundle:** all three improve corpus quality and unblock future handler work. Dedup is the safety net every future handler benefits from. #29 cleans existing Google Doc chunks. #30 cleans v3 metadata for all existing v3 chunks. Each is small (~1-2 hours); doing them sequentially across three sessions wastes per-session overhead.
+**Estimated effort:** ~4 hours, one session. **Spend:** ~$0.002 + Dan's OK on the #39 write.
 
-**Estimated effort:** ~half-day, one session. Spend ~$0.05 (small re-embedding for any chunks where #29 changes content meaningfully + standard test/dry-run costs).
+### Option B — Content sources doc (#35)
 
-**Real risks:**
-1. **#23 needs careful schema design.** Hash what? The pre-scrub text? Post-scrub text? Per-chunk or per-file? Surface as M-options before code.
-2. **#29 might require re-embedding the 14 existing Google Doc chunks** if the Canva strip changes content meaningfully. Halt-before-write for that.
-3. **#30 is metadata-only**, no re-embedding. Smallest risk.
+Single deliverable: `docs/CONTENT_SOURCES.md` mapping content domain → canonical Drive folder(s) → file forms to ingest vs. skip. Conversation-heavy, low API spend. Was Option B in session 19; deferred.
 
-### Option B — Content source-of-truth doc (BACKLOG #35)
+**Estimated effort:** ~1.5 hours.
 
-**Single deliverable:** `docs/CONTENT_SOURCES.md` mapping content domain → canonical Drive folder(s) → file forms to ingest vs. skip. Dan and Claude walk the inventory together; Dan decides; Claude documents.
+### Option C — Resume handler work (a new file type)
 
-**Why it matters:** without this, Option A's dedup safety net catches the *easy* duplicates (literal hash matches) but doesn't catch *format-duplicates* (same blog as docx + HTML + email). The content map catches those upstream by deciding which form is canonical per domain.
+The dedup safety net (#23 stage-2) is now in place. The Canva strip (#29) is in place. Both protect future handler work. Per the existing `MIME_CATEGORY` table, the next priorities are: **plaintext** (text/plain, text/markdown) → small + low-risk → **slides** (pptx) → larger → **sheets** (xlsx) → larger still.
 
-**Estimated effort:** ~1.5 hours of conversation + writing. Mostly conversational, low API spend.
+**Estimated effort:** ~3-4 hours including drift audit + dry-run.
 
-**Trade-off:** doesn't fix any code. Pure content-strategy work. Could be done before, after, or alongside Option A.
+### Option D — Folder-selection UI redesign (#21)
 
-### Option C — Both (recommended if energy allows)
+Biggest UX friction point per session 16. Standalone, no dependencies on RAG/data plane work. ~60-90 min.
 
-Do Option A in the morning, Option B in the afternoon (or split across the session). Option A produces the safety net code; Option B produces the content map. Together they unblock session 20+'s handler work cleanly. Both options have low API spend and complementary scope (one is code, one is conversation).
+### Tech-lead recommendation: **Option A**, with #38 and #39 first, #37 if time allows.
 
-**Estimated effort:** ~5-6 hours total, one session.
+Reasoning:
+1. Closing the deferred trio makes session 19's investment fully realized. #39 in particular gives the new metadata fields actual coverage (currently they exist only on chunks that don't exist yet).
+2. #38 is the verification that closes BACKLOG #29 fully — currently #29 is "code shipped, not yet measured against real corpus."
+3. #37 is the lowest priority of the three (vision OCR caching makes its real-world impact small) — can slip to session 21 if needed.
+4. Option B (#35) is high-value but conversation-bound — better when Dan has dedicated focus.
+5. Option C (new handler) violates the session 18 lesson "don't ingest a content domain until its source-of-truth is documented" — needs #35 first.
+6. Option D (#21) is good standalone work but doesn't compound with anything else in flight.
 
-### Other candidates (lower priority for session 19)
-
-- **BACKLOG #21** — folder-selection UI redesign. 60-90 min. Biggest UX friction point but not a content-quality issue.
-- **BACKLOG #32** — smarter Google Doc / docx locator detection (paragraph fallback for docs without h1-h6). ~2 hours. Useful but doesn't unblock anything.
-- **BACKLOG #34** — add `sample_chunks` to v3 dry-run dump-json. ~30 min. Quality-of-life for future halt-before-commit gates.
-- **BACKLOG #33** — rename `SESSION_16_CATEGORIES` → `SUPPORTED_CATEGORIES`. ~15 min. Cosmetic.
-- **BACKLOG #36** — revisit blogs commit decision (gated on #35 landing).
-
-**Tech-lead recommendation: Option C (A + B together).** Reasoning:
-1. Option A's three items are tightly related and benefit from one design pass (especially #23's hash-what-exactly question and #29's strip-strategy question).
-2. Option B unblocks the next handler session by giving it a content map to work from.
-3. Together they put us in the right state to resume handler work cleanly in session 20.
-
-If only one: **Option A.** The safety net code is the higher-leverage win because it benefits every future ingestion forever.
-
-It's Dan's call — surface all three, recommend C (or A as fallback), wait for the answer.
+If only one: **#39 + #38** as the smallest closure of session 19's loose ends. Both touchable in ~90 min.
 
 ---
 
@@ -187,67 +154,73 @@ Once Dan picks, scope a tight plan **before** writing any code:
 1. List the files you'll touch
 2. List the test scripts you'll write or update
 3. List any data writes (Chroma operations, file edits) and identify halt points
-4. Identify the "minimum viable closure" — the smallest deliverable that proves the scope landed
-5. Estimate spend in API calls (embeddings + LLM inference)
+4. Identify the "minimum viable closure"
+5. Estimate spend in API calls
 
 Get Dan's approval on the plan, THEN execute.
 
 **Standing rules carried forward (do not skip):**
 
-- **Halt before --commit.** Show dump-json before any write to Chroma. (Session 14 lesson.)
+- **Halt before --commit.** Show Dan dump-json before any write to Chroma. (Session 14 lesson.)
 - **Halt before any direct Chroma write of any kind.** No exceptions.
 - **No deletions** (files, chunks, collections) without approval AND a backup of the affected state.
-- **Pipe commit stdout to a file**, not `| tail` — session 16 lesson.
-- **Tech-lead volunteers architecture review at design-halt points.** When a design doc has a question mark or assumption, surface it as M-options (M1/M2/...) before code. (Session 15/16/17 lesson.)
+- **Pipe commit stdout to file**, not `| tail` — session 16 lesson.
+- **Tech-lead volunteers architecture review at design-halt points.** Surface M-options before code when a design has uncertainty.
 - **Read the Flask access log first** when debugging UI cache or save issues. (Session 16 lesson.)
 - **Test in Chrome before Safari** for admin UI iterative work. (Session 16 lesson.)
 - **When closing a BACKLOG item, verify in the environment where it manifested.** (Session 16/17 lesson.)
-- **No Railway writes from sessions.** Railway is read-only. Only Dan deploys.
+- **No Railway writes from sessions.** Railway is read-only.
 - **No touching legacy collections** (`rf_coaching_transcripts`, pre-scrub 584 A4M) without Dan's explicit OK.
 - **Credentials ephemeral** — never read `.env` content into chat.
-- **Never reference Dr. Christina / Dr. Chris / Dr. Massinople** in agent responses, sample chunks, test data, or anywhere else.
+- **Never reference Dr. Christina / Dr. Chris / Dr. Massinople** in agent responses, sample chunks, test data, anywhere.
 - **Dan does git operations**, not Claude.
-- **v2 frozen** unless extract-and-redirect to a shared module with byte-identical behavior verified by dry-run regression. M3 is the precedent. (Session 17.)
-- **When piloting a new feature, scan for real-world examples that exercise the feature**, not just any small example. (Session 17 lesson.)
-- **Prefer write-script-to-file over inline heredocs** for any Python script longer than ~10 lines. (Session 17 lesson.)
-- **Pre-commit drift audit on any new handler.** Side-by-side comparison of stored Chroma metadata for an existing chunk vs. the projected metadata. Schema must match exactly except for type-specific fields. (Session 18 lesson.)
-- **Don't ingest a content domain until its source-of-truth is documented.** Once `docs/CONTENT_SOURCES.md` exists, every bulk ingest must map back to a designated canonical source. (Session 18 lesson.)
-- **Build the safety net before the surface area grows.** Adding handlers is fast; cleaning duplicates after the fact is slow and risks corrupting retrieval. (Session 18 lesson.)
+- **v2 frozen** unless extract-and-redirect to a shared module with byte-identical behavior verified by dry-run regression.
+- **When piloting a new feature, scan for real-world examples that exercise the feature.**
+- **Prefer write-script-to-file over inline heredocs** for Python > ~10 lines.
+- **Pre-commit drift audit on any new handler.**
+- **Don't ingest a content domain until its source-of-truth is documented.**
+- **Build the safety net before the surface area grows.**
+
+**Three new rules from session 19:**
+
+- **When the constraint is "no Chroma writes," respect it sharply.** Path Z (defer the Chroma-client-up-top refactor) was the right call in session 19. Don't argue around hard constraints — work within them.
+- **A/B testing on n=1 is honest small-N work.** Don't oversell directional wins; report them as directional.
+- **Drift audit by replicated-block test beats live Chroma audit.** When verifying a metadata writer fix, write a synthetic test that replicates the exact dispatcher block. It catches future drift loudly without side effects.
+
+- **Watch context budget proactively.** Surface a warning at 30% remaining, not 10%. (Session 19 self-critique.)
 
 ---
 
-## Budget for session 19
+## Budget for session 20
 
-- **$1.00 interactive gate.** If any single task projects above $1.00 in API spend, halt and surface the cost to Dan before proceeding.
-- **$25.00 hard refuse.** No single session should ever spend more than $25 in API calls.
-- **Session 18 spent ~$0.0008.** Session 19 expected: ~$0.05 if Option A or C executes (small re-embedding for #29). Option B alone is ~$0.
+- **$1.00 interactive gate.** If any single task projects above $1.00, halt and surface to Dan.
+- **$25.00 hard refuse.**
+- **Session 19 spent ~$0.0001.** Session 20 expected: ~$0.002 if Option A executes (small embedding spend for #38 and #39).
 
 ## Files you'll likely touch (depending on scope)
 
-**For Option A (dedup + quality bundle):**
-- `ingester/loaders/drive_loader_v3.py` (#23 dedup pre-write filter, #30 metadata writer fix)
-- `ingester/loaders/types/google_doc_handler.py` (#29 `_strip_editor_metadata()`)
-- New: `scripts/test_canva_strip_synthetic.py`
-- New: `scripts/test_canva_strip_dryrun_existing_chunks.py` (re-extract 14 existing Google Doc chunks, dry-run, similarity comparison)
-- New: `scripts/test_dedup_synthetic.py`
-- `docs/HANDOVER.md`, `docs/BACKLOG.md`, `docs/STATE_OF_PLAY.md`, `docs/NEXT_SESSION_PROMPT.md`
+**For Option A:**
+- `ingester/loaders/drive_loader_v3.py` (#37 Chroma-client-up-top refactor + stage-1 logic)
+- New: `scripts/test_canva_strip_ab_existing_chunks_s20.py` (#38 A/B retrieval)
+- New: `scripts/test_dedup_stage1_synthetic_s20.py` (#37 stage-1 tests)
+- `data/selection_state.json` (#39 — temporarily widen to include the 8 v3 chunks for re-ingest, then restore)
 
-**For Option B (content sources):**
+**For Option B:**
 - New: `docs/CONTENT_SOURCES.md`
-- `docs/HANDOVER.md`, `docs/BACKLOG.md`, `docs/STATE_OF_PLAY.md`, `docs/NEXT_SESSION_PROMPT.md`
+- `docs/HANDOVER.md`, `docs/BACKLOG.md`, `docs/STATE_OF_PLAY.md`
 
 ## Files you should NOT touch
 
 - `chroma_db/*` — never edit directly. Any writes go through the v3 commit path.
 - `data/inventories/*.json` — folder walk output, never hand-edit.
 - `data/audit.jsonl` — append-only via the audit module.
-- Anything under `rf-coaching-call-recordings/` — pure read-only data.
 - `ingester/loaders/drive_loader.py` (v1) — frozen.
 - `ingester/loaders/drive_loader_v2.py` (v2) — frozen except for M3-style extract-and-redirect.
-- `ingester/loaders/types/pdf_handler.py` — no scope this session.
+- `ingester/loaders/types/pdf_handler.py` — out of scope.
 - `ingester/loaders/types/docx_handler.py` — shipped session 18, no changes needed.
+- `ingester/loaders/types/google_doc_handler.py` — shipped session 17 + session 19 strip, no changes needed unless adding new strip patterns.
 
-## Step 0 cheat sheet (for quick reference at the start of session 19)
+## Step 0 cheat sheet (for quick reference at the start of session 20)
 
 ```bash
 # Tools + repo
@@ -257,52 +230,31 @@ git status && git log --oneline -10
 # Chroma baseline (expect 605 — unchanged from session 17 close)
 ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); print('rf_reference_library:', col.count())"
 
-# v3 chunks (expect 8 = 7 pdf + 1 v2_google_doc + 0 docx)
+# v3 chunks (expect 8 = 7 pdf + 1 v2_google_doc, no s19 backfill yet)
 ./venv/bin/python3 -c "import chromadb; c=chromadb.PersistentClient(path='/Users/danielsmith/Claude - RF 2.0/chroma_db'); col=c.get_collection('rf_reference_library'); r=col.get(where={'source_pipeline':'drive_loader_v3'}, limit=30); cats=[m.get('v3_category','?') for m in r['metadatas']]; print('v3:', len(r['ids']), {c: cats.count(c) for c in set(cats)})"
 
-# OCR cache (expect ~34: 29 baseline + ~5 from session 18 blogs pilot)
-ls data/image_ocr_cache/*.json | wc -l
-
-# Test suite (expect all 9 green)
+# Test suite (expect all 12 green)
 export GOOGLE_APPLICATION_CREDENTIALS=/Users/danielsmith/.config/gcloud/rf-service-account.json
 set -a && . ./.env && set +a
-for t in scripts/test_scrub_s13.py scripts/test_scrub_wiring_s13.py scripts/test_types_module.py scripts/test_chunk_with_locators.py scripts/test_format_context_s16.py scripts/test_admin_save_endpoint_s16.py scripts/test_google_doc_handler_synthetic.py scripts/test_scrub_v3_handlers.py scripts/test_docx_handler_synthetic.py; do
+for t in scripts/test_scrub_s13.py scripts/test_scrub_wiring_s13.py scripts/test_types_module.py scripts/test_chunk_with_locators.py scripts/test_format_context_s16.py scripts/test_admin_save_endpoint_s16.py scripts/test_google_doc_handler_synthetic.py scripts/test_scrub_v3_handlers.py scripts/test_docx_handler_synthetic.py scripts/test_v3_metadata_writer_s19.py scripts/test_dedup_synthetic_s19.py scripts/test_canva_strip_synthetic_s19.py; do
   echo "=== $t ==="; ./venv/bin/python "$t" 2>&1 | tail -3
 done
 
-# Drive auth
-./venv/bin/python -c "from ingester.drive_client import DriveClient; c=DriveClient(); print('OK', c.service_account_email)"
-
-# Vertex auth
-./venv/bin/python -c "from google import genai; c = genai.Client(vertexai=True, project='rf-rag-ingester-493016', location='us-central1'); print(c.models.generate_content(model='gemini-2.5-flash', contents='Say ok and nothing else.').text)"
-
-# v2 dry-run regression (must be byte-identical to session 16/17 baseline)
-./venv/bin/python -m ingester.loaders.drive_loader_v2 --dry-run 2>&1 | tail -20
-
-# v3 dry-run regression on default selection (3 files / 9 chunks / cache hit)
-./venv/bin/python -m ingester.loaders.drive_loader_v3 --dry-run 2>&1 | tail -30
-
-# Admin UI process check
-lsof -iTCP:5052 -sTCP:LISTEN -P -n
-
-# Selection state shape (DFH folder + Egg Health Guide PDF, two-bucket)
-cat data/selection_state.json
+# v3 dry-run (expect 9 chunks, $0.0010, est_tokens ~7,603 — Canva strip active)
+./venv/bin/python -m ingester.loaders.drive_loader_v3 --dry-run 2>&1 | tail -25
 ```
 
 If all of the above passes, print:
 ```
 ✓ Step 0 PASS — repo at <hash>, rf_reference_library: 605, v3: 8 (7 pdf + 1 v2_google_doc + 0 docx),
-  OCR cache: ~34, all 9 tests green, admin UI on PID <pid>, selection_state v2 shape OK
+  OCR cache: 34, all 12 tests green, admin UI on PID <pid>, selection_state v2 shape OK,
+  v3 est_tokens ~7,603 (Canva strip active)
 ```
 
 Then proceed to Step 1.
 
 ---
 
-## End of session 19 prompt
+## End of session 20 prompt
 
-Session 18 shipped the docx handler clean (12/12 synthetic tests, drift-audit passed against PDF and Google Doc handlers, end-to-end dry-run on April-May 2023 Blogs.docx producing 7 chunks with `§§N-M` locators) but deferred the commit at the halt-before-commit gate when Dan surfaced the content-strategy gap (same blogs exist as docx, HTML, email — no canonical-source decision yet).
-
-Session 19 pivots: build the dedup safety net (#23) + clean existing Google Doc chunks (#29) + fix v3 metadata writer (#30) + produce the content sources doc (#35). Then session 20+ resumes handler work with a clean foundation.
-
-The system has 605 chunks, 8 of them v3-ingested. Zero docx chunks committed yet. Selection state restored to session-16/17 default. Working tree clean (after session 18 commit lands). Good luck.
+Session 19 closed the dedup safety net + Canva strip + #30 metadata writer fix at the code level, with three deferred items (#37 stage-1 dedup, #38 A/B retrieval test, #39 backfill of new fields on existing v3 chunks). System has 605 chunks, 8 of them v3-ingested. Zero Chroma writes since session 17. Twelve test scripts green. Working tree clean (after session 19 commit lands). Good luck.
