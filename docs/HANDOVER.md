@@ -2386,3 +2386,132 @@ ingester/loaders/drive_loader_v3.py.s20-backup        (pre-edit safety copy)
 ### Session 20 spend
 
 ~$0.0003 total. Breakdown: $0.000227 for #38's 8-input batched OpenAI embedding call, ~$0.0001 for Step 0 OpenAI + Vertex auth smoke pings.
+
+
+---
+
+## Session 21 — #39 backfill of 8 existing v3 chunks (2026-04-15)
+
+**Outcome:** BACKLOG #39 closed. First Chroma write since session 17. 8 v3 chunks upserted in place: 7 Egg Health Guide PDF chunks + 1 Sugar Swaps Google Doc chunk. All 4 s19 metadata fields now populated on every v3 chunk (with the documented exception that Google Docs have empty `source_file_md5` by Drive-API design, using `content_hash` for stage-2 dedup instead). Sugar Swaps chunk text now strip-ON in production — empirically verified to match the s20 A/B winner. Total spend: ~$0.001 for the commit + ~$0.0001 for verification A/B = ~$0.001 session total. All 13 test scripts still green. Count unchanged at 605.
+
+### Scope decision
+
+Dan picked Option A (#39 backfill alone) per tech-lead recommendation. Skipped #21 (UI redesign) to keep scope tight given context budget. Conservative snapshot strategy chosen over shadow-run.
+
+### Step 0 vs reality drift discovered
+
+The s21 prompt asserted selection_state covered "DFH folder + Egg Health Guide PDF" and that the dry-run would re-ingest the 8 existing v3 chunks. Halt 1 inspection revealed:
+
+- The 8 existing chunks are across **2 files** (not 3): 7 Egg Health Guide PDF chunks + 1 Sugar Swaps Google Doc chunk
+- The DFH folder selection (`18S1VfRyFdckGU_p15m3UmXS8cjHtMEKM`) does NOT contain Sugar Swaps — Sugar Swaps lives at `1sXOFoysJN0Pkv5rz9MJ0tDL6gWNnirgp` (`//7. Lead Magnets/[RF] Sugar Swaps Guide`)
+- Running dry-run as-is showed 3 files / 9 chunks: **2 NEW files** (DFH Wish List Google Doc + DFH Virtual Dispensary Google Doc) + 1 backfill (Egg Health). Sugar Swaps not touched, defeating the main retrieval-quality win.
+
+Three options surfaced (α: rewrite selection_state to explicit-files-only, β: commit as-is and accept 2 new file ingestions, γ: defer). Dan picked **α**.
+
+### What shipped — #39 ✅ CLOSED
+
+**Pre-flight (Halts 1 + 2):**
+- Backup `data/selection_state.json.s21-backup` created (the s17-pre-pilot shape)
+- Snapshot script `scripts/snapshot_v3_chunks_pre_s21.py` (35 lines) wrote `data/snapshots/v3_chunks_pre_s21_n39.json` — chunk-level JSON dump of all 8 chunks (IDs, text, metadata) before write, 42 KB
+- Full Chroma directory backup `chroma_db_backup_pre_s21_n39/` (484 MB), deleted at session close per Dan
+- Verified `ingester/loaders/drive_loader_v3.py:1058` uses `collection.upsert(...)` only — no `.delete` or `.add` in commit path
+- Verified chunk-ID determinism via `_drive_common.py:234`: `drive:<drive_slug>:<file_id>:<chunk_index:04d>` — all 8 planned IDs match all 8 existing IDs (zero orphans, zero new chunks)
+- selection_state edited to explicit 2-file form: Egg Health Guide PDF + Sugar Swaps Google Doc, both assigned to `rf_reference_library`
+- Dry-run confirmed: 2 files / 8 chunks / $0.0009 / Sugar Swaps stitched_text dropped 3,932 → 3,784 chars (strip applied at extraction time, ~148 chars off the head)
+
+**Commit (Halt 2 OK'd):**
+- `./venv/bin/python -m ingester.loaders.drive_loader_v3 --commit > /tmp/s21_n39_commit.log 2>&1`
+- Output: `count before: 605, count after: 605, delta: 0` ✓ (pure upsert)
+- Run record: `data/ingest_runs/d1fd4a2f717e4d2e.json`
+
+**Post-write verification (Halt 3):**
+| Criterion | Result |
+|---|---|
+| `rf_reference_library` count: 605 unchanged | ✓ |
+| 8 v3 chunks (no orphans) | ✓ |
+| `extraction_method` populated | 8/8 ✓ |
+| `library_name` populated | 8/8 ✓ |
+| `content_hash` populated | 8/8 ✓ |
+| `source_file_md5` populated | 7/8 — by design (Google Doc has no Drive md5; documented in BACKLOG #37 closure note) |
+| Sugar Swaps `canva.com` URL stripped | ✓ |
+| Sugar Swaps `COVER:` head tag stripped | ✓ |
+| Sugar Swaps text length 3932 → 3737 (195 chars stripped, matches s20 A/B's ~192) | ✓ |
+| All 13 test scripts green | ✓ |
+
+**Subtle behavior worth recording:** in production, the Sugar Swaps text length landed at 3,737 chars, but the dry-run estimated 3,784. The 47-char delta is because dry-run prints the stitched HTML extraction length and the production chunk text reflects the post-chunking single-chunk content (one chunk, near-identical, but chunking trims trailing whitespace). Not a bug.
+
+**Empirical retrieval verification (optional follow-on Dan greenlit):**
+- New script: `scripts/verify_sugar_strip_in_production_s21.py` (79 lines)
+- Pulls current production Sugar Swaps chunk, embeds it + the 6 s20 reference queries, compares cosine similarities against s20's strip-ON reference numbers
+- Result: all 6 deltas within ±0.02 (topical: +0.005, +0.009, +0.004; pollution: −0.007, −0.015, −0.005)
+- Conclusion: production retrieval now matches the s20 A/B winner empirically. The strip-ON version is live.
+
+```
+Query                                          Prod   s20 strip-ON        Δ
+sugar substitutes for fertility              0.5912         0.5865  +0.0047
+how does sugar affect hormones               0.4412         0.4320  +0.0092
+low glycemic foods for egg quality           0.4954         0.4911  +0.0043
+canva design template                        0.1768         0.1839  -0.0071
+page 1 cover layout                          0.2205         0.2357  -0.0152
+how to edit a canva document                 0.1674         0.1725  -0.0051
+```
+
+### Stage-1 dedup activation status
+
+Post-backfill, the 7 PDF chunks now carry md5 (`cf43024934ce90f6e1bdc8b8dcce676c` for Egg Health). Stage-1 dedup queries against `source_file_md5` for cross-file matches will now have data to match against — but only fires when a *different* file_id has the same md5 (i.e. a duplicate file in a different Drive location). Re-ingesting the same file_id correctly self-matches and falls through to extraction. The s20 wiring + synthetic tests prove the logic; #39 plants the seed data.
+
+### Files modified
+
+```
+data/selection_state.json                              (edited then restored to s16 shape by test_admin_save_endpoint_s16.py per #31)
+chroma_db/                                             (8 chunks upserted via drive_loader_v3 --commit)
+docs/HANDOVER.md                                       (this entry)
+docs/BACKLOG.md                                        (#39 marked RESOLVED)
+```
+
+### Files created
+
+```
+scripts/snapshot_v3_chunks_pre_s21.py              (35 lines, one-shot snapshot)
+scripts/verify_sugar_strip_in_production_s21.py    (79 lines, one-shot empirical A/B verification)
+data/snapshots/v3_chunks_pre_s21_n39.json          (42 KB, pre-write recovery dump)
+data/selection_state.json.s21-backup               (preserves pre-s21 shape)
+data/ingest_runs/8a0c411d42d2439f.dry_run.json     (pre-commit dry-run)
+data/ingest_runs/d1fd4a2f717e4d2e.json             (commit run record)
+data/ingest_runs/068b4312755f4afd.dry_run.json     (post-commit dry-run regression)
+```
+
+### Files deleted
+
+```
+chroma_db_backup_pre_s21_n39/   (484 MB, deleted at session close per Dan)
+```
+
+### Session 21 spend
+
+~$0.0011 total. Breakdown: $0.0009 commit embeddings, ~$0.0001 Step 0 auth smoke pings, ~$0.0001 follow-on A/B verification (7 small embeddings).
+
+### Lessons carried forward to session 22
+
+1. **Read the selection_state against the existing chunks before trusting prompt assertions.** The s21 prompt's "8 chunks across 3 files via DFH folder + Egg Health Guide" turned out to be one folder cascade away from accidentally ingesting 2 unrelated new files alongside the backfill. Halt 1 caught it. Pattern: when a prompt asserts what's in selection_state, run a `getall` on existing chunks and compare against `selection_state` before any commit.
+2. **Chunk-ID determinism is the strongest no-orphan guarantee.** The build_chunk_id formula is `drive:<drive_slug>:<file_id>:<chunk_index:04d>` — verifiable by reading 1 line of code, no Chroma queries needed. For any future re-ingest that's "supposed to upsert in place," confirming this in pre-flight is worth more than 100 lines of post-write verification.
+3. **The "stage-1 doesn't fire on this re-ingest" is correct, not a bug.** Stage-1 only fires on cross-file_id md5 matches. Re-ingesting the same file_id self-matches and falls through. Worth surfacing in BACKLOG #37 closure notes if anyone wonders later.
+4. **#31 (`test_admin_save_endpoint_s16.py` clobbers selection_state)** keeps biting at session-close cleanup. The test restored selection_state to the s16-pre-pilot shape after the suite ran. Coincidentally landing back at the same shape Step 0 found at session open is convenient (the s22 prompt's reality assertion will continue to match), but BACKLOG #31 is real and worth fixing.
+5. **Empirical A/B re-verification on a known-changed chunk is cheap and high-confidence.** $0.0001 + 5 minutes of code to confirm production matches the prior A/B winner. Worth doing whenever a Chroma write is supposed to land a previously-tested transformation.
+
+### Open items at session 21 close
+
+- BACKLOG #35 (CONTENT_SOURCES.md) — still untouched, gates bulk ingestion of new content domains
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — still gated on #35
+- BACKLOG #21 (folder-selection UI redesign) — untouched
+- BACKLOG #20 (inline citation prompting) — untouched
+- BACKLOG #31 (test clobbers selection_state) — bit again at s21, low priority but real
+- STATE_OF_PLAY session 19/20/21 amendments — deferred (HANDOVER captures everything)
+
+### Chroma state at end of session 21
+
+- `rf_reference_library`: **605 chunks** (UNCHANGED — pure upsert)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: **8** (7 pdf + 1 v2_google_doc) — ALL now have s19 metadata
+- Sugar Swaps chunk: now strip-ON in production (canva.com URL + COVER tag removed, 195 chars)
+- OCR cache: 34 files (unchanged)

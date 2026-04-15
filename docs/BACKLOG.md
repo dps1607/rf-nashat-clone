@@ -1102,8 +1102,12 @@ Strip removed 192 chars / 7 words from the Sugar Swaps chunk (Canva URL line + `
 
 ---
 
-### 39. Backfill new s19 metadata fields on existing v3 chunks
-**Priority:** Low. Cosmetic until a feature relies on the new keys being present on all chunks.
+### 39. Backfill new s19 metadata fields on existing v3 chunks — RESOLVED session 21
+**Priority:** Closed.
+
+**Closure (session 21):** Re-ingested the 8 existing v3 chunks via `drive_loader_v3 --commit` against a 2-file selection_state (Egg Health Guide PDF + Sugar Swaps Google Doc). Pure upsert in place: count 605 → 605, no orphans (chunk-ID determinism verified pre-flight via `_drive_common.py:234`). Result: `extraction_method`, `library_name`, `content_hash` populated 8/8; `source_file_md5` populated 7/8 (Google Doc has no Drive md5 by API design — uses `content_hash` for stage-2 dedup per #37 closure). Sugar Swaps chunk now strip-ON in production (canva.com URL + COVER tag removed, 195 chars stripped). Empirical A/B re-verification (`scripts/verify_sugar_strip_in_production_s21.py`) confirmed production retrieval matches s20 strip-ON winner — all 6 query similarities within ±0.02 of s20 reference. Spend: $0.0009 commit + $0.0001 verify. Pre-write snapshots: `data/snapshots/v3_chunks_pre_s21_n39.json` (chunk-level JSON, 42 KB, retained) + `chroma_db_backup_pre_s21_n39/` (full directory, 484 MB, deleted at session close per Dan).
+
+**Original scope (now historical):**
 
 **Scope:** Session 19 added four new metadata fields to the v3 per-chunk metadata builder:
 - `library_name` (canonical alias of `source_collection`, #30)
