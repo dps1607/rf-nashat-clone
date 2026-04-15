@@ -851,7 +851,7 @@ file's preamble.
 These items are wake from session 17 (BACKLOG #11 closure). Captured here so
 future sessions can pick them up cold.
 
-### 29. Strip Canva and editor metadata from Google Doc extraction — RESOLVED session 19 (code), A/B test → #38 — ✅ CODE RESOLVED in session 19, A/B verification → #38
+### 29. Strip Canva and editor metadata from Google Doc extraction — RESOLVED session 19 (code) + session 20 (A/B verification) — ✅ FULLY RESOLVED
 **Priority:** Medium. Pre-existing in v2; surfaced again by session 17 pilot.
 
 **Scope:** When v3's google_doc_handler extracts content from real lead-magnet
@@ -1059,39 +1059,46 @@ Dan decides the mappings; Claude documents. Becomes the input to selection decis
 
 ## NEW — added session 19
 
-### 37. Stage 1 (pre-extraction md5) dedup
-**Priority:** Low-Medium. Stage 2 (session 19) already catches the documented near-term cases.
+### 37. Stage 1 (pre-extraction md5) dedup — RESOLVED session 20
+**Priority:** Closed.
 
-**Scope:** Session 19 landed BACKLOG #23 stage-2 only (post-extraction `content_hash` check). Stage 1 (pre-extraction `source_file_md5` check, fast path that skips extraction entirely for binary-file dups) was deferred because it requires instantiating the Chroma client before the extraction loop runs, which is a non-trivial refactor of v3's commit/dry-run separation.
+**Closure (session 20):** Shipped via M-37-α design (Chroma client instantiated at the top of `run()` rather than deferred to commit branch). Stage-1 dedup check now runs inside the per-file dispatch loop, before `_dispatch_file()`. When a file's Drive `md5Checksum` matches an existing chunk's `source_file_md5` under a different `file_id` in the target collection, extraction is skipped entirely (saves Drive download + handler work).
 
-**Why deferred:** with vision OCR caching deployed in session 17, extraction cost on a re-upload is ~$0 anyway, so stage 1 is mostly cosmetic for the current corpus. The fields needed (`source_file_md5`) are already written to per-chunk metadata by session 19's code; only the query logic and the early-return are missing.
+**Files touched:**
+- `ingester/loaders/drive_loader_v3.py` — added `_check_md5_dedup()` helper alongside `_check_dedup`; moved Chroma client init from line 876 (commit branch) to right after `assert_local_chroma_path()`; added `_get_collection_for_dedup()` lazy cache (returns None for first-ingest case); added stage-1 block to dispatch loop; added `stage1_dedup_skips` to run summary + run record JSON.
+- `scripts/test_dedup_synthetic_s19.py` — extended to 15/15 (was 10/10): added 5 stage-1 unit tests (empty collection, match, self-match, empty md5 / Google Doc case, exception handling).
+- `scripts/test_stage1_dedup_wiring_s20.py` — NEW, 4/4 PASS. Replicated-block tests in the s19 "drift audit by replicated-block test beats live Chroma audit" pattern. Verifies dispatch-loop call signature matches helper signature, skip record shape, Google Doc bypass, missing-collection bypass.
 
-**Action when resumed:**
-1. Refactor: instantiate `chroma_client` at the top of `run()` so it's available in both dry-run (read-only) and commit (read+write) modes.
-2. Add stage-1 check inside the extraction loop, before `_dispatch_file()`. If `df.get("md5Checksum")` is non-empty AND a chunk in the target collection has matching `source_file_md5` AND `source_file_id != current_file_id` → log skip, increment a new `files_deduped` counter in the run record, continue.
-3. Update dry-run summary to include a stage-1 dedup ledger.
-4. Add tests to `test_dedup_synthetic_s19.py` for the stage-1 path.
+**Architectural note (M-37-α):** The "dry-run never touches Chroma" rule was a heuristic for "no writes, no cost." Read-only `collection.get()` queries have no side effects and complete in milliseconds — preserved the rule's intent while enabling stage-1. As a side benefit, dry-runs can now also surface stage-2 dedup hits as a preview (zero new code in stage-2 needed).
 
-**Estimated effort:** ~2 hours including the Chroma-client-up-top refactor + tests + v3 dry-run regression.
+**Why dry-run currently shows zero stage-1 skips:** the 8 existing v3 chunks (committed sessions 16/17, before s19) have no `source_file_md5` populated. Stage-1 has nothing to match against until #39 (backfill of s19 metadata fields on existing chunks) runs. The synthetic + wiring tests prove the logic works against simulated md5-populated collections.
+
+**v3 dry-run regression:** byte-identical to session 19 baseline (3 files, 9 chunks, est_tokens 7,603, $0.0010, vision cache hit). No regression. Backup at `ingester/loaders/drive_loader_v3.py.s20-backup`.
 
 ---
 
-### 38. Live A/B retrieval-similarity test on Sugar Swaps Canva strip
-**Priority:** Low-Medium. Code already proven via 15/15 synthetic tests; this is corroboration.
+### 38. Live A/B retrieval-similarity test on Sugar Swaps Canva strip — RESOLVED session 20
+**Priority:** Closed.
 
-**Scope:** Session 19 landed `_strip_editor_metadata()` and verified it via synthetic tests against hand-crafted fixtures matching the documented Sugar Swaps pollution patterns. The BACKLOG #29 directive also called for a live A/B retrieval-similarity test on the actual Sugar Swaps chunk in `rf_reference_library`. That test was deferred because session 19's context budget was consumed by the three-item bundle.
+**Closure (session 20):** Shipped via `scripts/test_canva_strip_ab_live_s20.py` using method M-38-x.2 (apply `_strip_editor_metadata()` directly to the existing Chroma chunk text rather than re-extract from Drive). Read-only against Chroma, no writes. Spend: $0.000227 (8 inputs batched into one OpenAI embedding call).
 
-**Action when resumed:**
-1. Re-extract Sugar Swaps from Drive via dry-run (vision cache hit, $0).
-2. Embed the strip-on stitched_text via OpenAI `text-embedding-3-large` (~$0.0005).
-3. Embed the strip-off stitched_text via the same call.
-4. Embed 2-3 known-good fertility queries (e.g., "sugar substitutes for fertility", "how does sugar affect hormones").
-5. Compute cosine similarity for each (chunk-version × query) pair.
-6. Report: `query_text → before_sim, after_sim, delta`. Expected: small positive delta on Sugar Swaps (less noise embedded → tighter match).
+**Result — clean directional signal in both directions:**
 
-**Estimated effort:** ~30 min, ~$0.001 spend.
+Topical queries (expected strip-ON ≥ strip-OFF):
+- "sugar substitutes for fertility"      0.5326 → 0.5865  (+10.1%)
+- "how does sugar affect hormones"       0.3875 → 0.4320  (+11.5%)
+- "low glycemic foods for egg quality"   0.4403 → 0.4911  (+11.5%)
 
-**Note:** the only currently-affected chunk in the corpus is Sugar Swaps (n=1). Honest small-N report. The 13 v2 DFH Google Doc chunks have no Canva pollution and would not change under the strip — synthetic tests already prove they're unaffected.
+Pollution-adjacent queries (expected strip-ON < strip-OFF):
+- "canva design template"                0.2808 → 0.1839  (−34.5%)
+- "page 1 cover layout"                  0.3647 → 0.2357  (−35.4%)
+- "how to edit a canva document"         0.2401 → 0.1725  (−28.1%)
+
+Strip removed 192 chars / 7 words from the Sugar Swaps chunk (Canva URL line + `COVER:` tag at the head). Honest n=1 caveat in script output: directional only, corroborates the 15/15 synthetic tests with live similarity numbers.
+
+**BACKLOG #29 now fully closed** (was code-resolved s19, A/B-deferred). The strip's quality benefit is empirically verified.
+
+**Open follow-on:** the strip-ON version isn't in Chroma yet — the Sugar Swaps chunk in production still has the pollution. Re-ingest happens whenever #39 (backfill) runs.
 
 ---
 

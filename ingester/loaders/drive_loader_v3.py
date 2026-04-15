@@ -153,6 +153,56 @@ def _compute_content_hash(stitched_text: str) -> str:
     return hashlib.sha256(stitched_text.encode("utf-8")).hexdigest()
 
 
+def _check_md5_dedup(
+    collection,
+    *,
+    md5_checksum: str,
+    current_file_id: str,
+) -> Optional[str]:
+    """
+    BACKLOG #37 (session 20) — Stage 1 dedup (pre-extraction).
+
+    Query `collection` for existing chunks whose `source_file_md5`
+    matches `md5_checksum`. If a match exists for a *different*
+    file_id, return that file_id (caller will skip extraction
+    entirely — fast path saves Drive download + extraction + chunking).
+
+    Mirrors `_check_dedup` (stage 2) shape exactly:
+      - per-collection scope (M-23-B.1)
+      - same-file_id self-match returns None (re-ingest via upsert allowed)
+      - empty md5 short-circuits (native Google Docs have no md5)
+      - defensive against collection.get exceptions
+
+    Stage 1 vs stage 2:
+      - Stage 1 (this helper): runs BEFORE extraction. md5 is the
+        binary file checksum from Drive, available without download.
+      - Stage 2 (`_check_dedup`): runs AFTER extraction. content_hash
+        is SHA256 of stitched_text, available after handler completes.
+        Catches dups that stage 1 misses (Google Docs, files with
+        identical extracted text but different md5 — e.g., docx with
+        different metadata blocks).
+
+    Both stages coexist; stage 1 is the cheap fast path.
+    """
+    if not md5_checksum:
+        return None
+    try:
+        result = collection.get(
+            where={"source_file_md5": md5_checksum},
+            limit=10,
+        )
+    except Exception:
+        # Defensive: if Chroma rejects the where clause for any reason
+        # (e.g., field doesn't exist on any chunk yet), treat as no match.
+        return None
+    metadatas = result.get("metadatas") or []
+    for m in metadatas:
+        existing_file_id = (m or {}).get("source_file_id", "")
+        if existing_file_id and existing_file_id != current_file_id:
+            return existing_file_id
+    return None
+
+
 def _check_dedup(
     collection,
     *,
@@ -411,6 +461,39 @@ def run(
     # --- 1. Local Chroma guard -------------------------------------------
     chroma_path = assert_local_chroma_path()
 
+    # --- 1b. Chroma client (M-37-α, session 20) --------------------------
+    # BACKLOG #37: instantiate the Chroma client up top so stage-1 dedup
+    # can query collections inside the per-file dispatch loop. Used in
+    # both dry-run (read-only stage-1 lookups) and commit (writes) modes.
+    # Client init is cheap (file-system handle, no network); the OpenAI
+    # embedding function is attached later in the commit branch only,
+    # so dry-run does not require OPENAI_API_KEY for client construction.
+    import chromadb as _chromadb_for_init
+    chroma_client = _chromadb_for_init.PersistentClient(path=str(chroma_path))
+    # Lazy per-library collection cache. Stage-1 dedup populates this
+    # the first time it sees a library; commit reuses the same handles.
+    # `None` value means the collection doesn't exist yet (first-ingest
+    # case) — stage-1 short-circuits to "no match" for those.
+    _collection_cache: dict[str, Any] = {}
+
+    def _get_collection_for_dedup(library: str):
+        """Return a collection handle for read-only dedup queries.
+
+        Returns None if the collection doesn't exist yet (first-ingest case)
+        so stage-1 dedup short-circuits cleanly. The commit path constructs
+        its own collection handles with the embedding function attached;
+        dedup queries here are metadata-only and don't need an EF.
+        """
+        if library in _collection_cache:
+            return _collection_cache[library]
+        try:
+            col = chroma_client.get_collection(name=library)
+        except Exception:
+            # Collection doesn't exist yet — first ingest into this library.
+            col = None
+        _collection_cache[library] = col
+        return col
+
     # --- 2. Selection load -----------------------------------------------
     selected_folders, library_assignments = load_and_validate_selection(
         selection_path
@@ -531,14 +614,48 @@ def run(
 
     by_category_counts: dict[str, int] = {}
 
+    # BACKLOG #37 (session 20): stage-1 dedup ledger. Files skipped here
+    # are NOT quarantine entries — they're healthy "already in collection"
+    # skips. Dry-run reports these as projected savings; commit honors them.
+    stage1_dedup_skips: list[dict] = []
+
     for i, entry in enumerate(entries, start=1):
         df = entry["drive_file"]
         file_id = df.get("id", "")
         file_name = df.get("name", "<unnamed>")
         mime = df.get("mimeType", "")
+        library = entry.get("library", "")
         print(f"  [{i}/{len(entries)}] {file_name}")
         print(f"      id:   {file_id}")
         print(f"      mime: {mime}")
+
+        # --- Stage 1 dedup (BACKLOG #37, session 20) ---------------------
+        # Pre-extraction md5 check. If this file's binary md5 already
+        # exists in the target library under a different file_id, skip
+        # extraction entirely. Native Google Docs have no md5 → empty
+        # string → _check_md5_dedup short-circuits to None and we fall
+        # through to extraction (stage 2 catches Google Doc dups post-
+        # extraction via content_hash).
+        md5_checksum = df.get("md5Checksum") or ""
+        if md5_checksum and library:
+            target_col = _get_collection_for_dedup(library)
+            if target_col is not None:
+                existing_fid = _check_md5_dedup(
+                    target_col,
+                    md5_checksum=md5_checksum,
+                    current_file_id=file_id,
+                )
+                if existing_fid:
+                    print(f"      STAGE-1 DEDUP: md5 matches existing file_id={existing_fid} in {library} — skipping extraction")
+                    stage1_dedup_skips.append({
+                        "drive_file_id": file_id,
+                        "file_name": file_name,
+                        "mime_type": mime,
+                        "library": library,
+                        "md5_checksum": md5_checksum,
+                        "existing_file_id": existing_fid,
+                    })
+                    continue
 
         # Session 16 fix: if this is a direct-file entry whose parent
         # folder couldn't be resolved in the manifest, quarantine as a
@@ -745,6 +862,12 @@ def run(
           f"({len(real_failures)} real, "
           f"{len(quarantine_entries) - len(real_failures)} deferred)")
     print(f"  total chunks:       {len(all_chunks_to_write)}")
+    if stage1_dedup_skips:
+        print(f"  stage-1 dedup skips: {len(stage1_dedup_skips)} "
+              f"(pre-extraction md5 match — extraction skipped)")
+        for skip in stage1_dedup_skips:
+            print(f"    - {skip['file_name']!r} (file_id={skip['drive_file_id']}) "
+                  f"→ matches existing file_id={skip['existing_file_id']} in {skip['library']}")
     print()
     if by_category_counts:
         print("  by_handler:")
@@ -798,6 +921,7 @@ def run(
         "files_quarantined": len(quarantine_entries),
         "files_quarantined_real": len(real_failures),
         "files_quarantined_deferred": len(quarantine_entries) - len(real_failures),
+        "stage1_dedup_skips": stage1_dedup_skips,
         "by_handler": dict(by_category_counts),
         "total_chunks": len(all_chunks_to_write),
         "per_file": per_file_chunk_counts,
@@ -866,14 +990,15 @@ def run(
     print(f"COMMIT — writing {len(all_chunks_to_write)} chunks to ChromaDB")
     print("=" * 70)
 
-    import chromadb
+    # Use the chroma_client instantiated up top (M-37-α). Only the embedding
+    # function is constructed here — it requires OPENAI_API_KEY and is
+    # commit-only. Dry-run never reaches this branch.
     from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
     ef = OpenAIEmbeddingFunction(
         api_key=os.environ["OPENAI_API_KEY"],
         model_name="text-embedding-3-large",
     )
-    chroma_client = chromadb.PersistentClient(path=str(chroma_path))
 
     # Group chunks by target library (v3 supports multi-library selections)
     by_library: dict[str, list[dict]] = {}

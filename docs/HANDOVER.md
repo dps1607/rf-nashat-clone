@@ -2243,3 +2243,146 @@ Execution order: #30 → #23 → #29 (smallest/safest to largest, so each landed
 **A/B retrieval-similarity test on Sugar Swaps deferred:** `scripts/test_canva_strip_ab_existing_chunks_s19.py` was scoped (Sugar Swaps only, n=1, ~$0.001 spend) but not built this session due to context window pressure. Filed as new BACKLOG #38.
 
 **Why "code-level closure" vs full closure:** the BACKLOG #29 acceptance criterion includes "verify retrieval similarity on a known-good query improves (or at least doesn't regress) after the strip." Synthetic tests confirm the strip works mechanically; the retrieval-quality validation is what's deferred. The strip is wired and live in v3 dispatch but its quality benefit is unverified empirically.
+
+
+---
+
+## Session 20 — #38 A/B verification + #37 stage-1 dedup (2026-04-15)
+
+**Outcome:** Two BACKLOG items closed: #37 (stage-1 pre-extraction md5 dedup) and #38 (live A/B retrieval-similarity test on Sugar Swaps Canva strip). With #38 closed, BACKLOG #29 is now fully resolved (was code-only at session 19 close). Zero Chroma writes per Dan's session-open directive ("I don't want to risk corrupting data in the rag"). Total spend: ~$0.0003 ($0.000227 for the live A/B + ~$0.0001 for the Step 0 auth smoke pings). All 13 test scripts green (added 1 new s20 wiring test, extended dedup test from 10/10 → 15/15).
+
+### Scope decision
+
+Dan picked Option A under the constraint "no Chroma writes this session, period." That removed #39 from scope. Tech-lead recommendation: #38 → #37, in that order (#38 first eliminated the #39/#38 sequencing dependency identified in Step 2 review). Dan picked the cleaner sequence and approved both items in sequence with batched halts.
+
+Pace direction received mid-session: "I need you to help us go a little faster" → switched to larger steps with strategic-only halts. Doc updates batched at session close (this entry).
+
+### What shipped — #38 (live A/B on Sugar Swaps) ✅ CLOSED
+
+**Method (M-38-x.2 — chosen over re-extracting from Drive):** apply `_strip_editor_metadata()` directly to the existing Chroma chunk text. Tests the exact text currently in production retrieval. No Drive auth, no vision client, no extraction pipeline moving parts. Synthetic tests (15/15 in s19) already cover the extraction-pipeline integration.
+
+**Files added:**
+- `scripts/test_canva_strip_ab_live_s20.py` (~160 lines) — fetches Sugar Swaps chunk via read-only `collection.get`, applies strip helper to produce strip-ON, embeds 8 inputs (2 chunk versions + 3 topical M-38-A queries + 3 pollution-adjacent M-38-B queries) in one batched OpenAI call, computes cosine similarities, prints two delta tables.
+
+**Result:** Strong directional signal in both directions. Topical queries +10 to +12% similarity with strip; pollution-adjacent queries −28 to −35% similarity with strip. 192 chars / 7 words removed (Canva URL + `COVER:` tag at the head). See BACKLOG #38 entry for the full numbers.
+
+**Honest n=1 caveat** carried in script output and BACKLOG entry: directional only, corroborates 15/15 synthetic tests with live similarity numbers, not a statistical retrieval-quality finding.
+
+**BACKLOG #29 now fully closed** — strip's quality benefit empirically verified. Open follow-on: the strip-ON version isn't in Chroma yet (Sugar Swaps in production still has the pollution); re-ingest happens whenever #39 runs.
+
+### What shipped — #37 (Stage 1 dedup) ✅ CLOSED
+
+**Architecture decision (M-37-α — Chroma client up top, unconditional):** Chosen over M-37-β (lazy init via helper) and M-37-γ (commit-only stage-1). Reasoning: the "dry-run never touches Chroma" rule was a heuristic for "no writes, no cost" — read-only `collection.get()` queries have no side effects, complete in milliseconds, and preserve the rule's intent. As a side benefit, dry-runs can now also surface stage-2 dedup hits as a preview without any new code in stage-2.
+
+**Files modified:**
+- `ingester/loaders/drive_loader_v3.py` (1017 → 1142 lines, +125):
+  - New `_check_md5_dedup(collection, *, md5_checksum, current_file_id) -> Optional[str]` helper alongside `_check_dedup`. Mirrors stage-2 shape exactly: per-collection scope, same-file_id self-match returns None, empty md5 short-circuits, defensive against `collection.get` exceptions.
+  - Chroma client + `_collection_cache` instantiated in step 1b right after `assert_local_chroma_path()`.
+  - New `_get_collection_for_dedup(library)` closure — returns `None` if collection doesn't exist yet (first-ingest case) so stage-1 short-circuits cleanly.
+  - Stage-1 block added inside the per-file dispatch loop, before `_dispatch_file()`. Empty md5 (Google Docs) → no query, fall through to extraction (stage-2 catches Google Doc dups via `content_hash`).
+  - New `stage1_dedup_skips: list[dict]` tracked separately from `quarantine_entries` (these are healthy skips, not failures).
+  - Run summary prints stage-1 ledger only when non-empty (clean output on zero skips).
+  - Run record JSON includes `stage1_dedup_skips` field.
+  - Removed redundant `chromadb.PersistentClient(...)` from commit branch (uses the up-top instance). Embedding function still constructed in commit branch only — dry-run doesn't require `OPENAI_API_KEY` for client construction.
+
+**Files added:**
+- `scripts/test_stage1_dedup_wiring_s20.py` (~210 lines, 4/4 PASS). Replicated-block tests in the s19 "drift audit by replicated-block test beats live Chroma audit" pattern. Verifies dispatch-loop call signature matches helper signature, skip record shape, Google Doc bypass (no md5), missing-collection bypass (first-ingest case). Catches future drift in either the helper signature or the dispatch loop without any Chroma side effects.
+
+**Tests modified:**
+- `scripts/test_dedup_synthetic_s19.py` — extended from 10/10 → 15/15. Added 5 stage-1 unit tests: empty collection returns None, match returns existing file_id, self-match returns None, empty md5 short-circuits (Google Doc case), exception handling.
+
+**Backup:** `ingester/loaders/drive_loader_v3.py.s20-backup`.
+
+### Why dry-run shows zero stage-1 skips today
+
+The 8 existing v3 chunks (committed s16/s17, before s19) have `source_file_md5: None`. Stage-1 has nothing to match against until #39 (backfill of s19 metadata fields on existing chunks) runs. The synthetic + wiring tests (9 total covering stage-1) prove the logic works against simulated md5-populated collections. **Once #39 happens, stage-1 will start firing on the existing PDFs immediately.**
+
+### Tests added/modified summary
+
+```
+test_dedup_synthetic_s19.py            10/10 → 15/15  ✓  (extended, +5 stage-1 tests)
+test_stage1_dedup_wiring_s20.py         4/4           ✓  NEW (replicated-block wiring tests)
+test_canva_strip_ab_live_s20.py        n/a            ✓  NEW (one-shot A/B test, not a unit test suite)
+```
+
+### Full test suite state (13 scripts, all green)
+
+```
+test_scrub_s13.py                        19/19  ✓
+test_scrub_wiring_s13.py                 PASS   ✓
+test_types_module.py                     12/12  ✓
+test_chunk_with_locators.py              PASS   ✓
+test_format_context_s16.py               23/23  ✓
+test_admin_save_endpoint_s16.py          16/16  ✓
+test_google_doc_handler_synthetic.py     9/9    ✓
+test_scrub_v3_handlers.py                2/2    ✓
+test_docx_handler_synthetic.py           12/12  ✓
+test_v3_metadata_writer_s19.py           4/4    ✓
+test_dedup_synthetic_s19.py             15/15   ✓  (extended s20)
+test_canva_strip_synthetic_s19.py       15/15   ✓
+test_stage1_dedup_wiring_s20.py          4/4    ✓  NEW
+```
+
+### Regression verification
+
+- **v3 dry-run:** byte-identical to session 19 baseline (3 files / 9 chunks / by_handler={pdf:1, v2_google_doc:2} / vision cache hit / est_tokens 7,603 / $0.0010 / zero stage-1 skips because existing chunks have no md5 to match against). New `stage1_dedup_skips: []` field present in run record JSON.
+- **v1 + v2 dry-runs:** not re-verified this session (no v1/v2 code touched).
+
+### What I deferred (and why)
+
+- **#39 (backfill 8 existing v3 chunks)** — Dan's session-open hard constraint: no Chroma writes. Without #39, stage-1 won't fire on the existing 8 PDFs and the strip-ON Sugar Swaps text isn't in production retrieval yet. Both will activate together when #39 runs.
+- **STATE_OF_PLAY.md amendment** — same as s19, this HANDOVER entry captures everything.
+- **#37's "dry-run can also surface stage-2 dedup hits" side benefit** — the M-37-α refactor enables it, but no code added this session to actually print stage-2 previews on dry-run. Trivial follow-on if useful.
+
+### Open items at session 20 close
+
+- BACKLOG #39 (backfill 8 existing v3 chunks) — Chroma write, gated on Dan's OK
+- BACKLOG #35 (CONTENT_SOURCES.md) — still untouched, still gates bulk ingestion
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — still gated on #35
+- BACKLOG #21 (folder-selection UI redesign) — untouched
+- STATE_OF_PLAY session 20 amendment — deferred to s21
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes (Dan's hard constraint)
+- `ingester/loaders/drive_loader.py` (v1) — frozen
+- `ingester/loaders/drive_loader_v2.py` (v2) — frozen
+- `ingester/loaders/types/*` — no scope this session
+- `admin_ui/*`, `rag_server/*` — out of scope
+- `docs/STATE_OF_PLAY.md` — deferred
+
+### Lessons carried forward to session 21
+
+1. **The "no Chroma writes" constraint is fully compatible with substantial progress.** Two BACKLOG items closed (one with code refactor + new helpers + 9 new tests, one with empirical verification) at zero data risk. Pattern: read-only Chroma queries are safe; writes are the gate.
+2. **Pre-flight read of the Chroma state revealed why dry-run wouldn't show stage-1 skips before code was even written.** The 8 existing v3 chunks lack the metadata fields stage-1 queries against. Worth surfacing this on any future "why isn't this firing" debug — the simplest answer is "the data it queries doesn't exist yet."
+3. **Sequencing matters when items interact.** The s19 → s20 prompt ordered #38 after #39, but #39 would have rewritten Sugar Swaps with the strip applied — destroying the strip-OFF baseline #38 needed. Inverting to #38 → #39 eliminated the dependency. Worth flagging at scope-decision time.
+4. **The replicated-block test pattern keeps paying off.** Two stage-1 wiring tests use it (signature drift + skip record shape). When the dispatch loop changes in a future session, these tests fail loudly without any Chroma side effect.
+5. **Spend tracking discipline.** Projected $0.0008 for #38; actual $0.000227 because all 8 inputs batched into one OpenAI call. Worth defaulting to batched embeddings.
+
+### Files modified summary
+
+```
+ingester/loaders/drive_loader_v3.py                  +125 lines  (M-37-α refactor + stage-1)
+scripts/test_dedup_synthetic_s19.py                  +73 lines   (5 new stage-1 tests, import update, main() registry)
+docs/BACKLOG.md                                      #29 fully closed, #37 closed, #38 closed (this session)
+docs/HANDOVER.md                                     this entry
+```
+
+### Files created summary
+
+```
+scripts/test_stage1_dedup_wiring_s20.py    ~210 lines  [4/4 PASS]
+scripts/test_canva_strip_ab_live_s20.py    ~160 lines  [one-shot A/B, not a unit test]
+ingester/loaders/drive_loader_v3.py.s20-backup        (pre-edit safety copy)
+```
+
+### Chroma state at end of session 20 (UNCHANGED from session 19 close)
+
+- `rf_reference_library`: 605 chunks (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (no new entries)
+
+### Session 20 spend
+
+~$0.0003 total. Breakdown: $0.000227 for #38's 8-input batched OpenAI embedding call, ~$0.0001 for Step 0 OpenAI + Vertex auth smoke pings.

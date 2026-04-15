@@ -15,7 +15,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from ingester.loaders.drive_loader_v3 import _compute_content_hash, _check_dedup
+from ingester.loaders.drive_loader_v3 import (
+    _compute_content_hash,
+    _check_dedup,
+    _check_md5_dedup,
+)
 
 
 class _MockCollection:
@@ -127,6 +131,58 @@ def test_dedup_handles_collection_get_exception() -> None:
     print("  [PASS] dedup handles collection.get exception gracefully")
 
 
+# -----------------------------------------------------------------------------
+# Stage-1 dedup tests (BACKLOG #37, session 20)
+# -----------------------------------------------------------------------------
+
+def test_md5_dedup_returns_none_on_empty_collection() -> None:
+    coll = _MockCollection(fake_chunks=[])
+    result = _check_md5_dedup(coll, md5_checksum="abc123def", current_file_id="file_X")
+    assert result is None, f"empty collection should return None, got {result!r}"
+    print("  [PASS] stage-1 md5 dedup returns None on empty collection")
+
+
+def test_md5_dedup_returns_existing_file_id_on_match() -> None:
+    coll = _MockCollection(fake_chunks=[
+        {"metadata": {"source_file_md5": "matchmd5", "source_file_id": "old_file"}},
+    ])
+    result = _check_md5_dedup(coll, md5_checksum="matchmd5", current_file_id="new_file")
+    assert result == "old_file", f"expected 'old_file', got {result!r}"
+    print("  [PASS] stage-1 md5 dedup returns existing file_id on md5 match")
+
+
+def test_md5_dedup_returns_none_on_self_match() -> None:
+    """Same file_id re-ingest must NOT fire (allows upsert behavior)."""
+    coll = _MockCollection(fake_chunks=[
+        {"metadata": {"source_file_md5": "samemd5", "source_file_id": "same_file"}},
+    ])
+    result = _check_md5_dedup(coll, md5_checksum="samemd5", current_file_id="same_file")
+    assert result is None, f"self-match should return None, got {result!r}"
+    print("  [PASS] stage-1 md5 dedup returns None on same-file_id self-match")
+
+
+def test_md5_dedup_returns_none_on_empty_md5() -> None:
+    """Native Google Docs have no md5 — short-circuit must fire."""
+    coll = _MockCollection(fake_chunks=[
+        {"metadata": {"source_file_md5": "", "source_file_id": "old_file"}},
+    ])
+    result = _check_md5_dedup(coll, md5_checksum="", current_file_id="new_file")
+    assert result is None, "empty md5 should short-circuit (Google Doc case)"
+    print("  [PASS] stage-1 md5 dedup short-circuits on empty md5 (Google Doc)")
+
+
+def test_md5_dedup_handles_collection_get_exception() -> None:
+    """Defensive: broken collection (e.g., field missing) must not raise."""
+    class _BrokenCollection:
+        def get(self, *, where, limit=10):
+            raise RuntimeError("simulated chroma failure")
+    result = _check_md5_dedup(
+        _BrokenCollection(), md5_checksum="any", current_file_id="any"
+    )
+    assert result is None, "broken collection should return None, not raise"
+    print("  [PASS] stage-1 md5 dedup handles collection.get exception gracefully")
+
+
 def main() -> None:
     print("test_dedup_synthetic_s19.py")
     print("=" * 60)
@@ -141,6 +197,12 @@ def main() -> None:
         test_dedup_returns_none_on_empty_content_hash,
         test_dedup_skips_other_collisions_finds_real_match,
         test_dedup_handles_collection_get_exception,
+        # BACKLOG #37 stage-1 tests (session 20)
+        test_md5_dedup_returns_none_on_empty_collection,
+        test_md5_dedup_returns_existing_file_id_on_match,
+        test_md5_dedup_returns_none_on_self_match,
+        test_md5_dedup_returns_none_on_empty_md5,
+        test_md5_dedup_handles_collection_get_exception,
     ]
     failed = 0
     for t in tests:
