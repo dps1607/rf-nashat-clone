@@ -532,3 +532,75 @@ sessions should treat v2 as frozen UNLESS the change is an extract-and-redirect
 to a shared module that preserves byte-identical v2 behavior, verified by
 dry-run regression. Anything else still needs explicit approval.
 
+
+
+---
+
+## Session 18 amendment (2026-04-15)
+
+### Where we are
+
+Session 18 built the v3 docx handler end-to-end and proved it on a real production file (April-May 2023 Blogs.docx, 7 chunks projected, full schema parity verified) — but did **NOT commit** the chunks. Mid-pilot, Dan surfaced a content-strategy question that warranted pausing handler-building before adding more types and multiplying cleanup surface area.
+
+The handler itself is shipped and tested:
+- 12/12 synthetic tests passing (`scripts/test_docx_handler_synthetic.py`)
+- Wired into `_dispatch_file` in `drive_loader_v3.py`
+- Drift-audited against PDF and Google Doc handlers — schema, chunker, scrub, marker convention, vision client, dispatcher signature all identical
+- Pilot dry-run produced 7 clean chunks with `§§N-M` locators and zero leakage
+
+The corpus state is unchanged from session 17:
+- `rf_reference_library`: 605 chunks
+- `rf_coaching_transcripts`: 9,224 chunks
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc) — docx handler is wired but has zero chunks committed
+
+### The content-strategy halt (and why session 19 pivots)
+
+The blog content in `April-May 2023 Blogs.docx` exists in at least three forms:
+1. The docx (this file)
+2. Published HTML on the Reimagined Health website
+3. Email broadcasts that went out at the time
+
+If we ingest the docx form now and then later add an HTML handler that pulls the same blogs from the website, we'll have ~95%-overlap chunks polluting retrieval. Same problem will hit:
+- Slides handler vs. PDF handler vs. docx handler (same content presented as deck, exported as PDF, drafted in Word)
+- AV handler vs. coaching-transcript collection (audio + Whisper transcript + Google Doc summary of one event)
+- HTML handler (777 currently-UNMAPPED files in inventory) vs. essentially every other text-bearing format
+
+This is a content-strategy gap, not a code gap. The handler architecture is fine. The corpus we ingest into is not yet protected from format-duplicate pollution.
+
+### What changes for session 19
+
+Session 19 pivots away from new handlers and onto **content quality and dedup infrastructure**:
+
+1. **Build BACKLOG #23 (content-hash dedup)** as a pre-write filter in v3's commit path. Idempotent — re-running an ingest of an already-ingested file becomes a no-op. Catches filesystem duplicates and re-ingestion. ~2 hours.
+
+2. **Close BACKLOG #29 (Canva editor metadata strip)** in `google_doc_handler` so existing Google Doc chunks (Sugar Swaps + 13 DFH) and any future Google Doc / docx chunks aren't polluted by Canva edit URLs and production tags. A/B retrieval-similarity test on the 14 existing Google Doc chunks, no Chroma writes. ~1-2 hours.
+
+3. **Close BACKLOG #30 (`extraction_method` and `library_name` not written to Chroma metadata)** in v3's metadata writer. Affects all v3-ingested chunks (PDF + Google Doc + future docx). Small fix in the per-chunk metadata builder. ~30 min.
+
+4. **Produce `docs/CONTENT_SOURCES.md`** — a mapping of content domain → canonical Drive folder(s) → file forms to ingest vs. skip. Dan decides; Claude documents. This becomes the input to selection decisions for any subsequent bulk ingestion.
+
+5. **(Stretch) BACKLOG #21 (folder-selection UI redesign)** if items 1-4 land with time to spare.
+
+After session 19, handler work resumes in session 20+ with a dedup safety net + content map + clean v3 metadata + clean Google Doc chunks. The next handler (likely plaintext or slides) inherits all of these and the next pilot can commit cleanly.
+
+### What's NOT changing
+
+- v1, v2, all existing v3 chunks — untouched
+- Existing test suite — all 9 scripts (93 tests) green at session 18 close
+- Dispatcher pattern, ExtractResult contract, `[SECTION N]` marker convention, chunker config (`MAX_CHUNK_WORDS=700`) — all proven, all stay
+- M3 extract-and-redirect precedent (session 17) — still the only blessed mechanism for v2 modifications
+- All session 14-17 hard rules — unchanged
+
+### Hard rules carried forward (still in effect)
+
+All session 17 hard rules unchanged. Plus three new ones from session 18:
+
+- **Pre-commit drift audit on any new handler.** Before any `--commit` for a chunk produced by a new handler, run a side-by-side comparison of stored Chroma metadata for an existing chunk in the same collection vs. the projected metadata. Schema must match exactly except for type-specific fields (`v3_category`, `v3_extraction_method`, `source_unit_label`, `source_file_mime`, locator format).
+
+- **Don't ingest a content domain until its source-of-truth is documented.** Once `docs/CONTENT_SOURCES.md` exists, every bulk ingest must map back to a designated canonical source for that content domain. Files not on the canonical list get skipped, not ingested-and-deduped-later.
+
+- **Build the safety net before the surface area grows.** Adding handlers is fast. Cleaning up duplicates after the fact is slow and risks corrupting retrieval. Content-hash dedup must land before the next handler does.
+
+### What's actionable for session 19
+
+See `docs/NEXT_SESSION_PROMPT.md`. Step 0 reality check + read this amendment + read HANDOVER session 18 entry + read BACKLOG items #23, #29, #30, plus the new #33-#36. Then surface scope options (recommendation: A = the 3-item dedup + quality bundle).

@@ -123,7 +123,7 @@ MIME_CATEGORY: dict[str, str] = {
 
 # Categories that have a real handler in session 16. Other categories
 # are recognized but skipped with reason="handler_not_implemented".
-SESSION_16_CATEGORIES = {"pdf", "v2_google_doc"}
+SESSION_16_CATEGORIES = {"pdf", "v2_google_doc", "docx"}
 
 
 # ----------------------------------------------------------------------------
@@ -192,6 +192,17 @@ def _dispatch_file(
         cfg = _HandlerConfig()
         cfg.vision_client = vision_client
         result = pdf_handler.extract(drive_file, drive_client, cfg)
+        return category, result
+
+    if category == "docx":
+        # Session 18 — .docx files via python-docx
+        from ingester.loaders.types import docx_handler
+        class _HandlerConfig:
+            pass
+        cfg = _HandlerConfig()
+        cfg.vision_client = vision_client
+        cfg.use_cache = True
+        result = docx_handler.extract(drive_file, drive_client, cfg)
         return category, result
 
     raise HandlerNotAvailable(f"no dispatch branch for category {category!r}")

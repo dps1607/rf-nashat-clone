@@ -1706,3 +1706,174 @@ See `docs/NEXT_SESSION_PROMPT.md` for the full session 18 bootstrap. Top candida
 
 Dan picks at the start of session 18.
 
+
+
+---
+
+## Session 18 — docx handler shipped, content-strategy halt called (2026-04-15)
+
+**Outcome:** The v3 docx handler is built, tested (12/12 synthetic PASS), wired into the dispatcher, and proven end-to-end on a real production file (April-May 2023 Blogs.docx, 7 chunks projected, full schema parity with PDF and Google Doc chunks verified). **No commit was made.** Mid-pilot, Dan surfaced a content-strategy question (duplicate content across formats — same blogs exist as docx, published HTML, and email broadcasts) that warrants pausing further handler-building until a content-source-of-truth strategy and content-hash dedup safety net are in place. Session closed at the halt-before-commit gate. Selection state restored to session-16 working state. Zero Chroma writes, ~$0.0008 spent on vision OCR (cached now for any future re-run).
+
+### What shipped (code)
+
+**`ingester/loaders/types/docx_handler.py` (NEW, ~280 lines):**
+- Public interface mirrors `pdf_handler` and `google_doc_handler`: `extract_from_path(path, *, vision_client, use_cache)` and `extract(drive_file, drive_client, config)`.
+- Walks `Document.element.body` directly (not `Document.paragraphs` + `Document.tables`) so paragraph/heading/table interleaving order is preserved.
+- Heading detection via `paragraph.style.name.startswith("Heading")` → emits `[SECTION N]` markers (same convention as Google Docs, consumed by `derive_locator` → `§N` / `§§N-M`).
+- Table serialization: pipe-delimited rows with markdown-style `--- | ---` header separator, spliced inline at table position.
+- Inline image extraction via XML walk for `wp:inline//a:blip` + `r:embed` relationship lookup → `image_part.blob` + `content_type`. Images sent through the shared `GeminiVisionClient` with the same OCR cache PDF and Google Doc handlers use. Decorative/failed/extract-failed images handled identically to google_doc_handler.
+- Returns `ExtractResult(extraction_method="docx_python_docx", source_unit_label="section", units_total=heading_count, ...)` with vision ledger deltas computed pre/post like google_doc_handler.
+- Floating images (anchor-positioned, not inline) are not exposed cleanly by python-docx and are skipped — same pragmatic choice the Google Doc handler makes for certain image types. Filed as a known limitation.
+
+**`scripts/test_docx_handler_synthetic.py` (NEW, ~340 lines, 12/12 PASS):**
+- Builds in-memory .docx fixtures using python-docx itself (4-heading doc with table + inline 1×1 PNG; no-headings doc; table-only doc). MockVisionClient with configurable decorative/fail modes and ledger.
+- Tests: imports, walk_document stream shape (heading/text/table/image kinds), section markers in stitched text (4 markers numbered 1-4), table content (pipe delimiter + header separator), image OCR integration, ExtractResult shape, chunk_with_locators integration (markers stripped + § locators populated), scrub fires on former-collaborator name (2+ replacements + zero leakage + markers survive scrub), no-headings fallback (warning emitted, locators None), table-only document, decorative image dropped, _serialize_table helper.
+- All 12/12 PASS first run.
+
+**`ingester/loaders/drive_loader_v3.py` (MODIFIED, 896 → 907 lines, two surgical edits):**
+- Edit 1: `SESSION_16_CATEGORIES = {"pdf", "v2_google_doc", "docx"}` (added "docx"). The constant name is now misleading (covers session 16, 17, 18) — flagged for rename in BACKLOG #33.
+- Edit 2: new dispatch branch for `category == "docx"` in `_dispatch_file()`, mirrors PDF and Google Doc branches exactly: `_HandlerConfig` shim with `vision_client` + `use_cache=True`, calls `docx_handler.extract(drive_file, drive_client, cfg)`.
+
+**`requirements.txt` (MODIFIED, +1 line):**
+- Added `python-docx>=1.1.0`. Installed in venv (1.2.0 actual) along with transitive `lxml-6.0.4`.
+
+### Drift audit (drive-by side-by-side comparison)
+
+Before the pilot was paused, did a thorough drift audit comparing actual stored Chroma metadata for an existing v3 PDF chunk vs. the existing v3 Google Doc chunk vs. the projected docx chunk metadata. **Result: identical 28-field schema across all three handlers.** Type-specific fields differ exactly where they should (`v3_category`, `v3_extraction_method`, `source_unit_label`, `source_file_mime`, locator format) — every other field matches.
+
+Behavioral parity also clean:
+- Same shared `chunk_with_locators()` chokepoint
+- Same shared `chunk_text()` (`MAX_CHUNK_WORDS=700`, `MIN_CHUNK_WORDS=80`, `PARAGRAPH_OVERLAP=True`)
+- Same Layer B scrub (through the chokepoint)
+- Same `[SECTION N]` marker convention as Google Docs (`PAGE_MARKER_RE` consumed by `derive_locator`)
+- Same shared `GeminiVisionClient` with same OCR cache for inline images
+- Same `ExtractResult` dataclass
+- Same `extract(drive_file, drive_client, config)` dispatcher signature
+- Same `_HandlerConfig` shim pattern
+
+### What was piloted (and intentionally not committed)
+
+**Pilot file:** `April-May 2023 Blogs.docx` (file_id `1IjhVUc6Px8II4FH0PsMJlOvNX01E6S1-`, 3.6 MB, drive `1-operations`, folder `//4. Systems/RH System SOPs and Maps by Jodie/Email Content Folder/Reimagined Health - Client Folder`). Picked from a 4-candidate scan because it was the only one of the four with real heading styles AND inline images AND substantial content (R10 — exercise the feature being tested).
+
+Per python-docx inspection: 275 paragraphs, 59 headings (H1-H4 mix), 0 tables, 5 inline images, 3,946 words, no former-collaborator names.
+
+**Dry-run result (`ingest_run_id=e1f02930bb104928`):**
+- 1 file enumerated, 1 processed OK, 0 quarantined
+- 7 chunks total: 688, 695, 683, 700, 689, 700, 383 words (all bounded by `MAX_CHUNK_WORDS=700`)
+- All 7 chunks have populated `display_locator` ranging from `§§1-10` to `§§55-59` — every chunk covers a clean span of headings
+- 5 images seen, 5 OCR'd on first run (vision_cost_usd=0.000729, ~$0.0009 embedding projected, $0.0016 total)
+- On a second run (used for chunk inspection), all 5 images were OCR cache hits → $0 vision cost
+- `extraction_method: docx_python_docx`, `v3_category: docx`, `source_unit_label: section`
+- Zero marker leaks in final chunk text, zero name leaks (no names to leak — file is clean)
+- Selection state was rewritten to a single-file selection during the pilot, then restored to session-16 working state at session close. Backup at `data/selection_state.json.s18-pre-pilot`.
+
+### Why no commit happened (the content-strategy halt)
+
+After the dry-run completed cleanly, Dan asked: "this is a summary of many years of blogs in docx form — we also have versions of these formatted and displayed on websites or that went out in emails. How do we ensure which form to use and which to not ingest as we move through the whole drive? We do not want duplicated content."
+
+This is a real, structural problem that compounds with every new handler:
+- Same content × multiple file forms (docx draft + published HTML + email broadcast)
+- Same content × multiple file copies (filesystem duplicates from team workflows — already visible in inventory: 2× Biocanic guide, 2× FKSP Call Booked email seq)
+- Drafts × revisions
+- Source × derivative (audio + transcript + Google Doc summary)
+
+**Decision:** pause handler-building, address the content-strategy gap and pre-existing v3-quality items (#29, #30) in session 19, then resume handler work in session 20+ with a dedup safety net and a content-source-of-truth map in place. Don't commit the blogs docx. Don't multiply cleanup surface area before the cleanup strategy exists.
+
+The handler itself is good and stays. The blogs commit is deferred — possibly forever (if HTML turns out to be the canonical blog source) or until the content map says docx is the canonical source for blog reference material.
+
+### What's NOT in this commit (intentional)
+
+- No Chroma writes (no `--commit` invocation)
+- No documentation of "docx handler proven on rf_reference_library" in STATE_OF_PLAY (the chunks didn't land)
+- No closure of any BACKLOG item (handler built but not deployed against real corpus, and the pilot itself wasn't committed)
+
+### Files created (session 18)
+
+```
+ingester/loaders/types/docx_handler.py         ~280 lines  [new module]
+scripts/test_docx_handler_synthetic.py         ~340 lines  [new test, 12/12 PASS]
+data/selection_state.json.s18-pre-pilot                    [pre-pilot backup, restored at session close]
+data/ingest_runs/e1f02930bb104928.dry_run.json             [dry-run record, not committed]
+data/ingest_runs/d3c2d848f1784b62.dry_run.json             [step-0 baseline dry-run record]
+```
+
+### Files modified (session 18)
+
+```
+ingester/loaders/drive_loader_v3.py     896 → 907 lines (SESSION_16_CATEGORIES + new docx dispatch branch)
+requirements.txt                        17 → 18 lines (+ python-docx>=1.1.0)
+data/selection_state.json               restored to session-16 working state at session close
+docs/HANDOVER.md                        this entry
+docs/BACKLOG.md                         #33-#36 added (session 18 wake)
+docs/STATE_OF_PLAY.md                   session 18 amendment appended
+docs/NEXT_SESSION_PROMPT.md             refreshed for session 19
+```
+
+### Test suite state (all green)
+
+```
+test_scrub_s13.py                        19/19  ✓  (pre-existing)
+test_scrub_wiring_s13.py                 PASS   ✓  (pre-existing)
+test_types_module.py                     12/12  ✓  (session 16)
+test_chunk_with_locators.py              PASS   ✓  (session 16)
+test_scrub_v3_handlers.py                2/2    ✓  (session 16)
+test_format_context_s16.py               23/23  ✓  (session 16)
+test_admin_save_endpoint_s16.py          16/16  ✓  (session 16)
+test_google_doc_handler_synthetic.py     9/9    ✓  (session 17)
+test_docx_handler_synthetic.py           12/12  ✓  NEW (session 18)
+```
+
+Plus regression-verified:
+- v1 dry-run: 1 file ingested, 2 low-yield skips (unchanged from session 17)
+- v2 dry-run: 2 files / 2 chunks / 1 vision cache hit / $0.0002 (byte-identical to session 16/17 baseline)
+- v3 dry-run on default selection (DFH folder + Egg Health Guide PDF): 3 files / 9 chunks / `by_handler={pdf:1, v2_google_doc:2}` (unchanged from session 17 baseline)
+
+### Chroma state at end of session 18
+
+**UNCHANGED from session 17:**
+- `rf_reference_library`: **605 chunks** (no writes this session)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc) — docx is wired but has zero chunks committed
+- OCR cache: 29 → 30 files (+1: the 5 inline images from the blogs pilot all collapse to a few cache entries — actual delta TBD; reference value is still 29 baseline)
+
+### Session 18 spend
+
+| Event | Cost |
+|---|---|
+| Step 0 reality checks (Vertex + OpenAI smoke) | ~$0.0001 |
+| Dry-run #1 (default selection, cache hit) | $0 |
+| Pilot file scan (4 candidates downloaded for inspection) | $0 |
+| Dry-run #2 (blogs pilot, 5 images OCR'd) | $0.000729 |
+| Chunk inspection re-extraction (cached) | $0 |
+| **Total** | **~$0.0008** of $1.00 budget |
+
+### Lessons carried forward to session 19
+
+1. **Architectural extensibility doesn't equal content readiness.** The dispatcher pattern is clean — adding a handler is ~3 hours of focused work. But the corpus we ingest into is a content product, not just a code product. A clean handler that ingests the wrong content form is a regression in retrieval quality even if every test passes. Future handler sessions should start with "what content does this unlock that we should ingest, and how do we know which form is canonical?" before any code.
+
+2. **Drift audit is fast and worth it before any commit.** The side-by-side schema comparison (PDF metadata × Google Doc metadata × projected docx metadata) took ~3 minutes and gave a definitive yes/no on schema parity. Future handler sessions should run this audit before the commit halt, not after.
+
+3. **The dispatcher pattern proven works for at least three different file types now** (PDF / Google Doc / docx — three structurally different formats: native binary with text + raster images, HTML export with inline images, OOXML with XML-walk + relationships). The pattern generalizes. Adding the next handler is mechanical, not architectural.
+
+4. **`MAX_CHUNK_WORDS=700` produces ~648-word chunks on average for docx.** Same chunker as PDF and Google Doc — same chunk size distribution should hold across all future text-bearing handlers (plaintext, slides, future HTML).
+
+5. **Real-world docx files have heading styles less consistently than expected.** 1 of 4 candidates scanned had real heading styles. The other 3 used bold-text-as-heading or no heading concept at all. This means BACKLOG #32 (paragraph fallback for missing headings) becomes more important once we resume handler work — applies to docx as much as to Google Docs.
+
+### Open items at session 18 close
+
+- **Content-source-of-truth strategy** — needs a mapping doc (`docs/CONTENT_SOURCES.md` proposed in session 19 plan) before bulk ingestion of any text-bearing file type
+- **Content-hash dedup (BACKLOG #23)** — promoted to session 19 priority, ~2 hours
+- **#29 (Canva strip)** and **#30 (extraction_method/library_name not written)** — bundle with #23 in session 19
+- **Blogs pilot commit** — deferred indefinitely pending content-source decision
+- **`SESSION_16_CATEGORIES` rename** — minor, BACKLOG #33
+- **`run_id` claimed `e1f02930bb104928` but the dump-json said `d3c2d848f1784b62`** — multiple dry-runs happened, both records on disk, no conflict
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes
+- `ingester/loaders/drive_loader.py` (v1) — frozen
+- `ingester/loaders/drive_loader_v2.py` (v2) — frozen (v2 dry-run regression byte-identical to baseline confirms)
+- `ingester/loaders/types/google_doc_handler.py` — no changes
+- `ingester/loaders/types/pdf_handler.py` — no changes
+- Any rag_server/* file — out of scope
+- Any admin_ui/* file — out of scope

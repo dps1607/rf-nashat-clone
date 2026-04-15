@@ -983,3 +983,72 @@ fallback path and a re-extraction (dry-run only, no Chroma writes) of the 2
 DFH chunks to verify they get fallback locators.
 
 ---
+
+
+---
+
+## NEW — added session 18
+
+### 33. Rename `SESSION_16_CATEGORIES` to something accurate
+**Priority:** Low. Cosmetic.
+
+**Scope:** The constant `SESSION_16_CATEGORIES` in `drive_loader_v3.py` now contains `{"pdf", "v2_google_doc", "docx"}`. The name is misleading — pdf was session 16, v2_google_doc was session 17, docx was session 18. Future handlers will keep adding to it.
+
+**Action:** rename to `SUPPORTED_CATEGORIES` (or `LIVE_HANDLER_CATEGORIES`). Pure rename, all-references update, no behavioral change. Touches `drive_loader_v3.py` and any tests/docs that grep for the old name.
+
+**Estimated effort:** ~15 min.
+
+---
+
+### 34. v3 dry-run dump-json doesn't include per-chunk text
+**Priority:** Low-Medium. Inspection-quality issue surfaced session 18.
+
+**Scope:** When `drive_loader_v3 --dry-run` writes its run record (`data/ingest_runs/<run_id>.dry_run.json`), the `per_file` array contains summary stats (chunk count, vision cost, extraction method) but no per-chunk text or per-chunk metadata. To inspect projected chunks during a halt-before-commit gate, sessions have to run a separate ad-hoc extraction script (session 18 wrote `/tmp/rf_docx_pilot_chunks.py` for this).
+
+**Why it matters:** The standing rule is "halt before --commit and show Dan dump-json output first." The dry-run dump should be self-contained enough to satisfy that rule without re-running extraction.
+
+**Action:** add a `sample_chunks` array to each `per_file` entry containing the first 3 chunks (or all if ≤3) with `text_preview` (first 200 chars), `word_count`, `display_locator`, `name_replacements`. Keep the dump under a few MB even on large runs. Don't include full chunk text (that's what the actual chunk store is for).
+
+**Estimated effort:** ~30 min including a regression test against the existing dry-run records.
+
+---
+
+### 35. Document content source-of-truth before bulk ingestion
+**Priority:** HIGH. Blocks bulk ingestion of any text-bearing file type.
+
+**Scope:** Surfaced session 18. The corpus we're building has multiple file forms of the same content:
+- Same content × multiple file forms (docx draft + published HTML + email broadcast of the same blog)
+- Same content × multiple file copies (filesystem dups already visible: 2× Biocanic guide, 2× FKSP Call Booked email seq)
+- Drafts × revisions
+- Source × derivative (audio + transcript + Google Doc summary of one event)
+
+Without a designated canonical source per content domain, we'll ingest near-duplicates and pollute retrieval.
+
+**Deliverable:** `docs/CONTENT_SOURCES.md` mapping content domain → canonical Drive folder(s) → file forms to ingest vs. skip. Format roughly:
+
+| Content domain | Canonical source | Skip |
+|---|---|---|
+| Blog posts | Published HTML on website | docx drafts, email broadcasts of blog content |
+| Lead magnets | The PDF or Google Doc actually delivered to customers | Drafts, Canva editor exports, internal review copies |
+| Coaching content | The transcript (already in `rf_coaching_transcripts`) | Email summaries, Google Doc recaps |
+| Email sequences | The docx of record | One-off sends, archived versions |
+| Educational reference | The A4M course PDFs and similar | Notes, summaries, blog versions of the same material |
+
+Dan decides the mappings; Claude documents. Becomes the input to selection decisions for any subsequent bulk ingestion.
+
+**Estimated effort:** ~1 hour of conversation with Dan to walk the inventory and decide canonical sources, then ~30 min to write the doc.
+
+---
+
+### 36. April-May 2023 Blogs.docx commit deferred indefinitely
+**Priority:** Marker, not a task. Tracks a deferred decision.
+
+**Scope:** Session 18 successfully dry-ran the docx handler against `April-May 2023 Blogs.docx` (file_id `1IjhVUc6Px8II4FH0PsMJlOvNX01E6S1-`, 7 chunks projected, all clean and locator-populated). The commit was deferred at the halt-before-commit gate because the same blog content exists in at least three forms (docx, published HTML on website, email broadcasts) and we hadn't decided which form is canonical.
+
+**Resolution path:** once `docs/CONTENT_SOURCES.md` (#35) is written and assigns a canonical source for "blog posts," revisit:
+  - If docx is canonical → commit the blogs file (re-run the dry-run, confirm 7-chunk count unchanged, run --commit, verify 7-point closure checklist)
+  - If HTML is canonical → skip the docx, plan an HTML handler for a future session
+  - If email broadcasts are canonical → skip the docx, plan a different ingestion strategy
+
+**Until resolved:** the docx handler stays wired, but no blog-form docx files get committed. The pilot record at `data/ingest_runs/e1f02930bb104928.dry_run.json` documents what would have been written.
+
