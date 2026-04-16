@@ -1264,22 +1264,36 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 
 ## NEW — added session 26 (2026-04-16, governance reset)
 
-### 42. Railway sync backlog (s21–s25 local changes not in production)
-**Priority:** Medium. Becomes HIGH the moment Dr. Nashat wants to test anything production-visible.
+### 42. Railway sync backlog (s21–s25 local changes not in production) — ✅ RESOLVED session 28
+**Priority:** Closed.
 
-**Scope:** Local is ahead of Railway by the following closures, none individually large, but accumulating. No Railway sync has happened since the s20/s21 window.
+**Closure (session 28):** Railway chroma synced via Z1 tarball-bootstrap playbook. Pre-sync Railway probe confirmed stale state (rf_reference_library=584, v3 chunks=0, Sugar Swaps missing — the April-9 Phase-3 baseline). Post-sync verification matches local byte-for-byte: 605 / 9224 / 8 v3 (7 pdf + 1 v2_google_doc) / Sugar Swaps len=3737 strip-ON, no canva, no COVER. Railway rag_server log at 16:36:32 UTC confirms `loaded collection 'rf_reference_library': 605 chunks`. Production smoke not required — rag_server startup chunk count is the authoritative signal.
+
+**Execution (what actually happened):**
+1. Built 485MB tarball locally (`tar cf /tmp/chroma_db.tar --exclude='.DS_Store' chroma_db/`, 508040704 bytes — matches Phase-3 baseline exactly).
+2. Served via `python3 -m http.server 8000` + `cloudflared tunnel --url http://127.0.0.1:8000` — tunnel URL `rear-poison-trackbacks-secretary.trycloudflare.com` (now dead).
+3. Verified tunnel end-to-end with `curl -sI` (HTTP/2 200, content-length 508040704, HEAD logged by python http.server).
+4. Cleared Railway `/data/chroma_db` via `railway ssh`. Note: deletion left a harmless macOS `._chroma_db` AppleDouble artifact at `/data/._chroma_db`; bootstrap guard checks for subdirs inside `/data/chroma_db` so the artifact doesn't interfere.
+5. `railway variables --set "CHROMA_BOOTSTRAP_URL=<tunnel>"` auto-triggered a redeploy (building 11:23:05 local, success at 16:36).
+6. Bootstrap logs confirmed: `download complete (485M), extracting… chroma_db extracted: 485M, 55 files`. 55 files matches the Phase-3 baseline in `HANDOVER_PHASE3_COMPLETE.md`.
+7. Deleted `CHROMA_BOOTSTRAP_URL` from Railway variables (bootstrap guard path now safe: next redeploy will hit `chroma_db already populated, leaving alone`).
+8. Local cleanup: killed cloudflared + python http.server, `rm /tmp/chroma_db.tar`.
+
+**Probe script retained:** `/tmp/rf_s28_railway_chroma_probe.py` on Mac, `/tmp/rf_s28_probe.py` on Railway container. These are ephemeral (`/tmp` on both sides) and will be cleaned up by OS/container restart. Not promoted to `scripts/` because the logic is trivially re-derivable from CURRENT STATE assertions.
+
+**Spend:** $0 (no LLM calls). Railway compute rounding-error. Tarball transfer via free trycloudflare tunnel was the bottleneck — ~12 minutes wall clock for the 508MB download at ~1MB/s.
+
+**Historical scope (what was synced):**
 
 - **s21:** 8 v3 chunks backfilled with s19 metadata fields (`extraction_method`, `library_name`, `content_hash`, `source_file_md5`). Sugar Swaps Google Doc chunk re-ingested with Canva strip-ON (empirically verified matches s20 A/B winner).
 - **s24:** `rag_server/display.py` canonical renderer (NEW, 260 lines). `rag_server/app.py` migrated to wrapper pattern. `config/schema.py` extended with `Behavior.citation_instructions` + `Knowledge.render`. Both agent YAMLs (`nashat_sales.yaml`, `nashat_coaching.yaml`) updated with `citation_instructions` text + per-collection `render` blocks.
 - **s25:** No code changes (A/B validation run only). Script `test_citation_instructions_ab_live_s25.py` retained for on-demand re-validation. YAML citation text verified ship-as-is.
 
-**Execution:** tarball + bootstrap via cloudflared quick tunnel, per the documented Phase 3.5 playbook. ~6 minutes wall clock once #43 (ruamel.yaml fix) lands.
-
-**Blocker:** #43 must ship first — current `yaml.safe_dump` in `admin_ui/forms.py` can corrupt multi-line YAML strings in production if Dr. Nashat edits either agent YAML via the admin UI (the s24 citation_instructions are multi-line and would be at risk).
-
-**Anti-scope:** no new features bundled into the sync. Ship the accumulated closures, verify, then resume feature work. The sync itself is not the time to ship anything that isn't already local-stable and test-green.
-
-**Estimated effort:** ~1hr (sync + smoke test on production URL + spot-check both agents via /chat against production). Spend: ~$0 (sync is free; smoke-test is a few Sonnet calls on the live endpoint, ~$0.05).
+**Lessons carried forward:**
+- Free trycloudflare tunnels are ~1MB/s, which dominates the wall-clock budget for a 485MB sync. Time-boxing future syncs should assume ~15min for tunnel-based transfers.
+- `set -euo pipefail` in `bootstrap.sh` + the `if curl …; then` pattern handles curl retry-and-fail correctly; the 3-attempt retry with 5s delay did not trigger during s28 (first download succeeded).
+- Railway CLI quirks: `variables --set` auto-triggers redeploy (desirable here), but `variables delete` does not (also desirable — avoids unnecessary churn). `redeploy --yes` returns "cannot be redeployed" while a build is in progress; it's not an error, just wait.
+- Code was already on Railway at commit `4ffbfe4` from a prior-session ghost-push (per s27 HANDOVER); this sync only needed to address the chroma data plane, not code. Future syncs should decouple code sync (git push) from data sync (tarball bootstrap) in the same way.
 
 ---
 

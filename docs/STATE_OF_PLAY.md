@@ -13,7 +13,7 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 
 ## What's live, right now
 
-**Production (Railway):** Two-process stack at `https://console.drnashatlatib.com`, gated by Cloudflare Access, allowlisting Dan and Dr. Nashat. ChromaDB on persistent volume. The stack has been live since 2026-04-09 and is stable. **Production is behind local by sessions s21–s25 worth of changes** (see "Railway sync backlog" below) — no Railway pushes have happened since the s20/s21 window.
+**Production (Railway):** Two-process stack at `https://console.drnashatlatib.com`, gated by Cloudflare Access, allowlisting Dan and Dr. Nashat. ChromaDB on persistent volume. The stack has been live since 2026-04-09 and is stable. **As of s28, Railway is synced with local** — code at `4ffbfe4` (s26 per s27 ghost-push discovery) and chroma at s21-backfill parity (605 / 9224 / 8 v3 / Sugar Swaps strip-ON).
 
 **Local (development sandbox):** `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone/` with Chroma at `/Users/danielsmith/Claude - RF 2.0/chroma_db/`. This is where all s16–s25 work has landed. Local leads Railway.
 
@@ -89,7 +89,7 @@ test_format_context_s24.py             (79/79)
 2. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #35)
 3. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
 4. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point)
-5. **BACKLOG #42 NEW s26 — Railway sync backlog** (local is s21–s25 ahead of production; unblocked by #43 closure s27)
+5. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap; Railway now matches local byte-for-byte)
 6. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session, verified via byte-identical YAML round-trip test)
 
 ## What's declined (do not re-propose)
@@ -103,14 +103,15 @@ These are strategic declines. Reopen only if the documented trigger fires — ot
 
 See `docs/DECISIONS.md` for the full rationale.
 
-## Railway sync backlog (s21–s25 changes not yet in production)
+## Railway sync history (s28 closure)
 
-Local is ahead of Railway by these closures. No single change is large but they compound, and the longer the drift grows, the riskier the eventual atomic sync. Track as BACKLOG #42.
+Railway was synced with local at s28 via the Z1 tarball-bootstrap playbook (BACKLOG #42 RESOLVED).
 
-- s21: 8 v3 chunks backfilled with s19 metadata fields; Sugar Swaps strip-ON in production Chroma
-- s24: `rag_server/display.py` canonical renderer + both agent YAMLs (`citation_instructions` + `knowledge.render` blocks)
-- s25: no code changes (A/B validation only) — YAML citations verified ship-as-is
-- **#43 `ruamel.yaml` fix: ✅ ALREADY RESOLVED** — s27 reality check found `admin_ui/forms.py` already uses `ruamel.yaml` round-trip; byte-identical load/dump/reload test on both agent YAMLs passed s27. #42 unblocked.
+- **Pre-s28 Railway state:** still at the April-9 Phase-3 baseline (rf_reference_library=584, v3=0, Sugar Swaps not present). Code was at `4ffbfe4` (s26) from a s27 ghost-push auto-deploy, but chroma data had never been synced.
+- **s28 sync executed:** local tarball (508040704 bytes, 31 entries, matches Phase-3 baseline exactly) served via `python3 -m http.server` + trycloudflare tunnel, downloaded + extracted by `bootstrap.sh` after `railway variables --set CHROMA_BOOTSTRAP_URL=…` triggered a redeploy. Bootstrap logs: `download complete (485M), extracting… chroma_db extracted: 485M, 55 files`. Railway rag_server restart loaded `rf_reference_library: 605 chunks` at 16:36:32 UTC. `CHROMA_BOOTSTRAP_URL` deleted post-sync (next redeploy hits the safe `chroma_db already populated, leaving alone` path).
+- **Post-s28 state:** Railway probe matches local byte-for-byte — 605 / 9224 / 8 v3 (7 pdf + 1 v2_google_doc) / Sugar Swaps len=3737 strip-ON.
+- **#43 `ruamel.yaml` fix:** ✅ RESOLVED s27 (already-done-at-a-prior-session, verified byte-identical on both agent YAMLs).
+- **Cost:** $0. Free trycloudflare tunnel was ~1MB/s, so wall clock was ~12 min for the 485MB transfer. Time-box future syncs at ~15 min for tunnel-based approaches.
 
 ## Governance model (established s26)
 

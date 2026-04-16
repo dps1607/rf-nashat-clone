@@ -3269,3 +3269,96 @@ $0 total. No LLM calls. Governance work + code reading + one local YAML round-tr
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+## Session 28 — BACKLOG #42 RESOLVED via Z1 tarball-bootstrap Railway chroma sync (2026-04-16)
+
+**Outcome:** Opened with scope B (verify-only query planned; Z1 only if stale). Probe found Railway chroma stale at the April-9 Phase-3 baseline (rf_reference_library=584, v3=0, Sugar Swaps not present) — confirming the s21–s25 accumulated sync debt had never actually reached production. With Dan's approval, ran the full Z1 tarball-bootstrap playbook from `HANDOVER_PHASE3_COMPLETE.md`. Post-sync probe matches local byte-for-byte: 605 / 9224 / 8 v3 (7 pdf + 1 v2_google_doc) / Sugar Swaps len=3737 strip-ON. **#42 fully resolved.** Zero LLM calls. $0 spend. Wall clock ~25 min (12 min of which was the 485MB tarball download over trycloudflare's ~1MB/s tunnel).
+
+### Step 0 reality check — PASS
+
+Top commit `00ee651` (s27 follow-up) above `a3a5c0a` (s27 main commit) above `4ffbfe4` (s26). Minor narrative drift only: the s28 prompt said "expected top commit: s27 commit" singular, but s27 had landed as two commits. No data drift. Working tree clean, `origin/main == HEAD` (no ghost-push state this time). Data plane unchanged from s27 close: 605 / 9224 / 8 v3 / Sugar Swaps strip-ON locally. OCR cache 34. Admin UI still on PID 78159. All assertions matched the s28 prompt's 0.3 reality expectations. Used absolute `CHROMA_DB_PATH` from `.env` throughout — the s27 foot-gun (relative-path `PersistentClient` auto-creating empty stubs) did not recur.
+
+### Scope B — Railway chroma verification, then Z1 sync
+
+**B1 probe recon:** Railway gunicorn workers run under `/opt/venv/bin/python` (Nixpacks layout). System `/nix/var/nix/profiles/default/bin/python` lacks chromadb; invoking `/opt/venv/bin/python` directly from `railway ssh` fails with `libstdc++.so.6: cannot open shared object file`. Fix: copy `LD_LIBRARY_PATH` from `/proc/<gunicorn-pid>/environ` (specifically `/nix/store/…-gcc-13.3.0-lib/lib:/nix/store/…-zlib-1.3.1/lib:/usr/lib`). This resolved the s27 blocker ("finding the right python binary on Railway was the blocker in s27"). Worth promoting to a short recipe in a future session.
+
+Probe script (`/tmp/rf_s28_railway_chroma_probe.py` on Mac, uploaded to container `/tmp/rf_s28_probe.py` via base64 to avoid stdin-hang and inline-heredoc issues): asserts CHROMA_DB_PATH resolves, lists collections, counts both, queries `source_pipeline=drive_loader_v3`, checks Sugar Swaps by `display_source` match. ~30 lines, ephemeral.
+
+**B2 pre-sync finding:** rf_reference_library=584 (−21 vs local 605), v3 chunks=0, Sugar Swaps not present. rf_coaching_transcripts=9224 (matches). Chroma sqlite mtime 16:12 UTC today (from my probe's read — read-only PersistentClient touches sqlite), but content inside was pre-s21 baseline. UUID subdirs matched local because Chroma UUIDs are stable across upserts — file-structure equality was a red herring.
+
+**B3 Z1 sync execution:** Dan green-lit the full playbook. Sequence:
+1. Preflight: cloudflared 2026.3.0 ✓, python3 http.server ok ✓, local chroma_db at 485M with 5 UUID subdirs + chroma.sqlite3.
+2. Built tarball: `tar cf /tmp/chroma_db.tar --exclude='.DS_Store' chroma_db/` from `/Users/danielsmith/Claude - RF 2.0/` — 508,040,704 bytes, 31 entries. Matches Phase-3 baseline byte-for-byte.
+3. Served: `python3 -m http.server 8000` in background (PID 97843).
+4. Tunneled: `cloudflared tunnel --url http://127.0.0.1:8000` (PID 97856) — URL `https://rear-poison-trackbacks-secretary.trycloudflare.com` (now dead).
+5. Verified end-to-end: `curl -sI <tunnel>/chroma_db.tar` → HTTP/2 200, content-length 508040704, cloudflare headers. python http.server logged the HEAD hit, confirming the full tunnel→Mac path works.
+6. Cleared Railway: `railway ssh "rm -rf /data/chroma_db"`. Left a harmless `/data/._chroma_db` AppleDouble artifact (macOS metadata residue from an original upload) — bootstrap guard checks for subdirs inside `/data/chroma_db` so the artifact doesn't interfere with the populated/empty detection.
+7. Set URL + auto-redeploy: `railway variables --set "CHROMA_BOOTSTRAP_URL=<tunnel>/chroma_db.tar"` auto-triggered a redeploy (deployment id `36642b62…` BUILDING at 11:23:05 local).
+8. Monitored download: `curl` inside the new container took ~12 min to pull 508MB at ~1MB/s over the free trycloudflare tunnel.
+9. Bootstrap log confirmation: `[bootstrap] download complete (485M), extracting… [bootstrap] chroma_db extracted: 485M, 55 files`. Matches Phase-3 baseline exactly (55 files).
+10. Rag_server startup at 16:36:32 UTC: `[startup] loaded collection 'rf_reference_library': 605 chunks` — authoritative confirmation.
+11. Post-sync probe: 605 / 9224 / 8 v3 (7 pdf + 1 v2_google_doc) / Sugar Swaps len=3737 strip-ON. ✓ Matches local byte-for-byte.
+12. Cleanup: `railway variables delete CHROMA_BOOTSTRAP_URL` (did NOT auto-trigger a redeploy — desirable behavior). Killed cloudflared + http.server. Deleted local `/tmp/chroma_db.tar`.
+
+### Files modified
+
+```
+docs/BACKLOG.md          #42 marked ✅ RESOLVED s28 with full execution log + lessons
+docs/STATE_OF_PLAY.md    (a) Production line: "Railway is synced with local" instead of "behind by s21–s25"
+                          (b) Priorities section: #42 moved to resolved list
+                          (c) "Railway sync backlog" heading replaced with "Railway sync history (s28 closure)" narrative
+docs/HANDOVER.md         this entry
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` (local) — no writes
+- `admin_ui/forms.py` — no scope (ruamel fix was already in place s27)
+- `config/*`, `rag_server/*`, `ingester/*` — no scope this session
+- The three demoted plan docs (ARCHITECTURE, REPO_MAP, COACHING_CHUNK_CURRENT_SCHEMA)
+
+### Session 28 spend
+
+$0 total. No LLM calls. Railway build/compute costs are rounding-error.
+
+### Lessons carried forward to session 29+
+
+1. **Free trycloudflare tunnels are ~1MB/s.** Time-box future tarball-bootstrap syncs at ~15 min for a 485MB payload. If a larger sync is ever needed, consider a paid Cloudflare tunnel or Railway's direct upload paths. Not worth premature optimization for this data volume.
+
+2. **Railway Nixpacks python probe recipe.** For cold-session diagnostics against the production chroma: (a) find gunicorn via `ps auxww | grep /opt/venv`, (b) read `/proc/<pid>/environ` for `LD_LIBRARY_PATH`, (c) run `/opt/venv/bin/python` with that env var prepended. This resolves the s27 "finding the right python binary" blocker cleanly.
+
+3. **Railway variable churn semantics.** `variables --set` auto-triggers redeploy; `variables delete` does not. Design cleanup sequences accordingly — setting CHROMA_BOOTSTRAP_URL triggers the work; deleting it afterward is a safe no-op because the bootstrap guard is idempotent. If the URL remained set, the next unrelated redeploy would hit the populated-dir guard and skip re-download anyway, so leaving it set is technically safe — but deleting it still preferred for hygiene and to avoid surprising a future reader.
+
+4. **Upload probe scripts via base64, not stdin heredoc.** s27's stdin-pipe hang is the reason. `SCRIPT_B64=$(base64 < local_file | tr -d '\n')` + `railway ssh "echo '\$SCRIPT_B64' | base64 -d > /tmp/probe.py && …"` is reliable across CLI versions and shell quoting. Small probe scripts stay in `/tmp` on both sides; no need to promote unless they become recurring utilities.
+
+5. **sqlite mtime during read-only probe is a trap.** `chromadb.PersistentClient()` on a pre-existing volume touches sqlite mtime even on a read. Don't rely on mtime as a "last write" signal when diagnosing sync state — rely on content counts.
+
+6. **UUID subdir equality ≠ content equality.** Chroma UUIDs are stable across upserts, so matching UUID directory names between volumes does NOT prove content parity. The s27 `/data/chroma_db = 485M, 55 files, 5 UUIDs matching local exactly` observation misled the narrative; the actual content inside was pre-s21 baseline. Always query row counts + metadata as the authoritative check.
+
+### Open items at session 28 close
+
+- BACKLOG #35 (HIGH) — CONTENT_SOURCES.md, still blocking bulk ingestion. Highest strategic pick for s29.
+- BACKLOG #36 — April-May 2023 Blogs.docx (gated on #35)
+- BACKLOG #40 — Coaching link-surfacing A/B (~$0.25)
+- BACKLOG #21 — Folder-selection UI redesign (now carried from s27 → s28 → s29)
+- BACKLOG #17 — deferred w/ reopen trigger
+- BACKLOG #6b — declined
+- **F3 (unnumbered)** — `PersistentClient` guard against silent empty-chroma auto-creation on wrong relative paths. ~30 min, low-priority but clean add-on for any session that touches `_drive_common.py`.
+- **E (#34 dry-run per-chunk text dump)** — tactical observability, ~30-45 min, $0.
+- Next v3 handler — gated on #35
+- **Full Step 1.5 audit next due: session 31** (every 5 sessions; s26 was the last)
+
+### Chroma state at end of session 28
+
+**Local (unchanged from s27):**
+- `rf_reference_library`: 605 chunks (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files
+
+**Railway (newly synced, matches local byte-for-byte):**
+- `rf_reference_library`: 605 chunks
+- `rf_coaching_transcripts`: 9,224 chunks
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- Sugar Swaps: len=3737, strip-ON
+- Local-vs-Railway delta: **none** (first time since project start)
