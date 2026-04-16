@@ -104,6 +104,20 @@ behavior:
   no_answer_message: "I don't have a clear answer for that one in my knowledge base. The best next step is to visit drnashatlatib.com or book a discovery call with our team — we can give you something much more specific to your situation. Is there another question I can help with?"
   show_citations: true
 
+  # Session 24 (BACKLOG #20) — citation guidance.
+  # Sales agent: light-touch. Don't interrupt conversational flow with heavy
+  # citations, but ground specific facts in their sources when context
+  # includes them. Missing page/link = cite just the source name, never
+  # invent.
+  citation_instructions: |
+    When you reference specific facts from the retrieved knowledge, briefly
+    note the source (e.g., "per the Egg Health Guide" or "from the A4M
+    fertility curriculum"). Keep citations natural and light — don't
+    interrupt the flow of a warm conversation. When the Source line in
+    context includes page or section info, include it ("per the Egg Health
+    Guide, pp. 4-6"). When only the source name is shown, cite just the
+    name. Never invent page numbers, links, or source titles.
+
   model_provider: "anthropic"
   model_name: "claude-sonnet-4-6"
   temperature: 0.4
@@ -205,6 +219,24 @@ knowledge:
     top_k: 8
     similarity_threshold: 0.65
     reranker_enabled: false
+
+  # Session 24 (BACKLOG #18) — per-collection rendering policy.
+  # Controls which metadata fields are surfaced to the LLM in context
+  # blocks. Retrieved chunks are unchanged — this only shapes what the
+  # model reads. Missing collections here fall through to sensible
+  # per-collection defaults in rag_server/display.py.
+  #
+  # Client identifiers (client_rfids, client_names, call_fksp_id,
+  # call_file) are NEVER surfaced regardless of these knobs — enforced
+  # in display.py code. No YAML knob exposes them by design.
+  render:
+    rf_reference_library:
+      show_source_label: true    # filename or "A4M Module N: topic"
+      show_speaker: true         # named presenter when available
+      show_topics: true
+      show_locator: true         # pages/sections for citable refs
+      show_link: true            # Drive webViewLink when available
+      show_date: true
 
 # -----------------------------------------------------------------------------
 # AUDIENCE — quotas (forward-looking, not enforced yet in Phase 1)

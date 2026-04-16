@@ -93,6 +93,7 @@ class Behavior(BaseModel):
     creativity: Creativity = Creativity.adaptive
     no_answer_message: str = Field(..., max_length=400)
     show_citations: bool = True
+    citation_instructions: str = Field("", max_length=2000)
     model_provider: ModelProvider = ModelProvider.anthropic
     model_name: str = Field("claude-sonnet-4-6", max_length=100)
     temperature: float = Field(0.4, ge=0.0, le=2.0)
@@ -128,11 +129,36 @@ class RetrievalConfig(BaseModel):
     reranker_model: Optional[str] = Field(None, max_length=100)
 
 
+class RenderConfig(BaseModel):
+    """Per-collection rendering policy.
+
+    Controls what metadata fields are surfaced to the LLM in the retrieved
+    context block. Does NOT filter retrieved chunks themselves — client
+    identifiers, RFIDs, call dates etc. remain in chunk.metadata for
+    downstream consumers (lab correlation, client tracking, analytics).
+
+    Missing fields default to False (conservative: don't leak metadata
+    the operator didn't explicitly opt into).
+
+    Note: client identifiers (client_rfids, client_names, call_fksp_id,
+    call_file) are NEVER rendered regardless of these knobs — hardcoded
+    in rag_server/display.py. There is no YAML knob that surfaces them.
+    """
+    model_config = ConfigDict(extra="forbid")
+    show_source_label: bool = False
+    show_speaker: bool = False
+    show_topics: bool = False
+    show_locator: bool = False
+    show_link: bool = False
+    show_date: bool = False
+
+
 class Knowledge(BaseModel):
     model_config = ConfigDict(extra="forbid")
     knowledge_collections: list[str] = Field(default_factory=list)
     staff_exclusions: list[str] = Field(default_factory=list)
     retrieval_config: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    render: dict[str, RenderConfig] = Field(default_factory=dict)
 
 
 # ============================================================================

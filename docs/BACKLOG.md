@@ -587,13 +587,14 @@ maintenance specifically.
 **Estimated effort:** ~30 min.
 
 
-### 17. display_subheading cosmetic normalization (REVISED SCOPE)
-**Priority:** Medium.
+### 17. display_subheading cosmetic normalization — DEFERRED session 24 (no consumer)
+**Priority:** Low (revised s24). No current consumer reads `display_subheading`.
 
-**Original scope (session 15):** Normalize leading `//` and drive-name prefix
-in `display_subheading` for the 13 v2 DFH chunks.
+**Session 24 finding:** The canonical `chunk_to_display(chunk)` helper (#18 closure) reads `source_file_name` (v3) / `module_number`+`module_topic` (legacy A4M) for the rendered source label, not `display_subheading`. The field is a dead-letter in the current retrieval path. Normalizing it is busywork until a concrete consumer appears (export pipeline, UI surface, new retrieval mode). Per the s23 "coupled items shouldn't be split casually" principle, #17 only becomes real when #18's renderer or a future feature actually reads it.
 
-**Revised scope (session 16):** This affects ALL THREE chunk populations:
+**Reopen trigger:** A surface appears that reads `display_subheading` (admin UI chunk browser, export to docs, debugging tool, etc.) and rendering inconsistency becomes user-visible.
+
+**Original scope (historical, session 15/16):** This affects ALL THREE chunk populations:
 - 9,224 `rf_coaching_transcripts` chunks
 - 584 pre-scrub A4M chunks in `rf_reference_library`
 - 13 v2 DFH chunks in `rf_reference_library`
@@ -612,16 +613,51 @@ pass per collection. The bundle saves ~3-4 sessions of incremental work and
 
 ---
 
-### 18. `format_context()` doesn't use session-9 normalized display fields
-**Priority:** Medium.
+### 18. `format_context()` doesn't use session-9 normalized display fields — RESOLVED session 24 — ✅ RESOLVED
+**Priority:** Closed.
 
-**Scope:** `rag_server/app.py:format_context()` was written before session 9's
-display-field normalization and still reads old A4M-specific names
-(`module_number`, `module_topic`, `speaker`, `topics`). Session 16's Step 10
-added a minimal v3-aware branch (Option R3) so v3 PDF chunks render with
-`Source: ... — Link: ...`, but the legacy A4M code path is untouched.
+**Closure (session 24):** Shipped `rag_server/display.py` with canonical `chunk_to_display(chunk, render_configs) -> dict` + `format_context(chunks, render_configs) -> str`. `rag_server/app.py` migrated — the branch-heavy inline renderer is gone, replaced with a thin wrapper that delegates to the canonical helper and passes the current agent's per-collection render config.
 
-**Migration plan:**
+**Design highlights:**
+
+1. **Two-layer separation.** Retrieval returns full chunks with all metadata (API responses via `/query` + `/chat` are unchanged — lab correlation and client tracking code reads `chunk.metadata` directly). The *rendering* layer is what gets filtered.
+
+2. **YAML-configurable visibility.** Each agent's `knowledge.render.<collection>` block controls which display fields are surfaced to the LLM. Schema: `show_source_label`, `show_speaker`, `show_topics`, `show_locator`, `show_link`, `show_date`. Missing collection → sensible per-collection defaults in display.py (`_DEFAULT_RENDER`). Missing block entirely → defaults everywhere. Backward compatible with any existing YAML.
+
+3. **Hardcoded protection of client identifiers.** `client_rfids`, `client_names`, `call_fksp_id`, `call_file` are NEVER surfaced to the LLM regardless of any YAML knob. Enforced in `_resolve_speaker()`/`_resolve_date()` for coaching (return "" even when the YAML config says show_speaker=true) and by the fact that no resolver function reads those fields at all. No knob to flip by accident.
+
+4. **Graceful degradation.** `_clean(value)` normalizes `None`, `"Unknown"`, `"unknown"`, `"None"`, and whitespace-only to `""`. Every renderer field goes through it. No "Presenter: Unknown" artifacts. The M3 A4M case (speaker = literal "Unknown") renders with no Presenter line at all. Missing locator → no em-dash separator in the Source line. Missing source_label entirely → renders just the chunk text under the item divider.
+
+5. **Canonical source resolution covers all 4 populations:**
+   - v3 PDF / Google Doc / docx → `source_file_name`
+   - Legacy A4M → `A4M Module {n}: {topic}` or `A4M: {topic}` if no module number
+   - Coaching → `""` (section header scopes it; avoids per-item leak of call identifiers)
+   - Unknown collection → falls through to generic `CONTEXT (name):` header
+
+**Files shipped:**
+- `config/schema.py` — added `RenderConfig` model + `Behavior.citation_instructions` + `Knowledge.render` (2 optional fields, extra="forbid" honored)
+- `rag_server/display.py` — NEW, 260 lines, documents the protection contract explicitly
+- `rag_server/app.py` — imports `format_context as _format_context_v2`; thin wrapper delegates with current agent's render config; citation_instructions appended to system prompt when non-empty
+- `scripts/test_format_context_s24.py` — NEW, 79/79 PASS, covers 4 populations × full/degraded metadata × YAML override × protected-field leak checks × mixed-population render × unknown-collection fallback
+- `scripts/test_format_context_s16.py` — one assertion updated (s24 canonicalization means A4M chunks now emit `Source: A4M Module N: ...` like v3 chunks; the assertion that encoded the old "v3 gets Source:, A4M gets Module:" inconsistency is now `Source: A4M Module 7: ...` expected). 22/22 PASS.
+- `config/nashat_sales.yaml` — added `citation_instructions` (light-touch, warm voice) + `knowledge.render` for rf_reference_library
+- `config/nashat_coaching.yaml` — added `citation_instructions` (clinical transparency) + `knowledge.render` for both collections
+
+**Verification:**
+- All 13 pre-existing test scripts still green
+- New test: 79/79 PASS
+- Both agent YAMLs validate against the updated schema
+- Live render against real Chroma chunks (coaching + v3 PDF) produced expected output: coaching showed only `Topics: ...`, no RFIDs/names/dates; v3 PDF showed full `Source: ... — pp. 1-6 — date` + `Link: ...`
+- Zero Chroma writes this session
+
+**What was NOT done (deferred, by design):**
+- A/B testing of citation_instructions effect on Sonnet responses — deferred to s25 (~$0.05 budget, 2 queries × 2 agents × before/after). Work is validation-only; code merge doesn't depend on it.
+- #17 display_subheading normalization — no current consumer reads the field; deferred until a surface appears.
+- Metadata-only upserts on existing chunks — not needed; canonical helper reads existing fields as-is.
+
+**Live observation (not a defect of this work):** Coaching chunks in production contain `"dr christina"` tokens inside the chunk body text itself (speaker diarization labels from pre-scrub ingestion). These are NOT leaked by the renderer — they're content inside `document`, not metadata. Current Sonnet 4.6 handles them correctly per s15 finding. This is the territory BACKLOG #6b was declined s23; the s23 reopen-trigger language still applies.
+
+**Original scope (historical):**
 1. Define a canonical `chunk_to_display(chunk) -> dict` helper with fields
    like `source_label`, `locator`, `link`, `summary` etc.
 2. Each chunk population's writer populates these at ingest time.
@@ -647,16 +683,24 @@ and rewrites to natural-sounding prose.
 **Estimated effort:** ~1 hour. Optional polish.
 
 
-### 20. Inline citation prompting in agent system prompts
-**Priority:** Medium.
+### 20. Inline citation prompting in agent system prompts — CODE SHIPPED session 24, A/B DEFERRED to s25
+**Priority:** Closed-pending-A/B.
 
-**Scope:** Session 16's `format_context()` update makes source filenames, page
-locators, and Drive links available to Sonnet in retrieved context. The
-session 16 /chat smoke test confirmed Sonnet uses the chunks for grounding,
-but does NOT inline-cite them in the response — neither `nashat_sales.yaml`
-nor `nashat_coaching.yaml` currently prompts Sonnet to surface sources.
+**Session 24 work:**
+- Added `behavior.citation_instructions` field to schema (optional, empty default)
+- `assemble_system_prompt()` appends when non-empty under `CITATION GUIDANCE:` header
+- Sales agent YAML: light-touch guidance ("brief, warm, don't interrupt flow, page/link when shown, never invent")
+- Coaching agent YAML: clinical transparency guidance ("cite explicitly, include page/section when shown, offer Link when available, never invent")
+- Both handle missing metadata gracefully in-prompt: "When only the source name is shown, cite just the name."
 
-**Action:** add to both persona prompts something like:
+**What remains: A/B test (s25, ~$0.05).** Validate effect on Sonnet responses. Representative queries per agent × before/after citation_instructions. Verify:
+- Sales voice doesn't become stilted or over-clinical
+- Coaching responses gain explicit source references without losing warmth
+- Neither agent invents page numbers or links when context lacks them
+
+**If A/B shows voice regression,** tune the YAML text only — no code changes needed.
+
+**Original scope (historical):**
 > "When referencing specific facts from the retrieved context, cite the source
 > filename and page (e.g., 'per the Egg Health Guide, p. 8'). When referencing
 > a guide the user could read in full, offer the Drive link."

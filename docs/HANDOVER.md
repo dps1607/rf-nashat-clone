@@ -2708,3 +2708,199 @@ docs/NEXT_SESSION_PROMPT_S24.md           (created — supersedes S23 prompt)
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+
+---
+
+## Session 24 — #18 closed (canonical retrieval-rendering contract) + #20 code shipped, A/B deferred (2026-04-15)
+
+**Outcome:** BACKLOG #18 closed. BACKLOG #20 code shipped, A/B validation deferred to s25. BACKLOG #17 explicitly deferred (no consumer reads the field). Zero Chroma writes, zero spend beyond Step 0 auth smokes (~$0.001 total).
+
+`rag_server/display.py` is the new canonical rendering layer. `rag_server/app.py`'s branch-heavy inline `format_context()` is gone, replaced by a 6-line wrapper that delegates to the shared helper with the current agent's per-collection render config. Every future v3 handler inherits the canonical display contract — no future session needs to re-litigate field naming for new file types.
+
+### Scope decision
+
+Dan picked **Option A** (retrieval-quality bundle: #18 + #20 + #17). After reading #17's BACKLOG entry during design, tech-lead flagged that #17 is invisible without a consumer that reads `display_subheading` — and the new renderer doesn't read it. #17 deferred with explicit reopen trigger documented (surface appears that reads the field). #18 + #20 landed clean.
+
+Two architectural decisions from Dan during design, both load-bearing:
+
+1. **Retrieval must preserve full chunk metadata** so downstream systems (lab correlation, client tracking, analytics) keep working. Only the *rendering* to the LLM prompt is filtered. This led to the two-layer design in `display.py`.
+
+2. **Citation behavior should be YAML-tunable, not hardcoded in Python.** This led to the new `behavior.citation_instructions` field + per-collection `knowledge.render` blocks. Operators can tune citation density and metadata visibility without touching code.
+
+### Step 0 reality check — all sub-checks PASS, no drift from s23
+
+- Repo at `acbc174`, working tree clean (7 ahead of origin — Dan's)
+- `rf_reference_library`: 605 (unchanged since s21)
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc), all 4 s19 metadata fields populated
+- Sugar Swaps strip-ON in production: len 3737, no canva.com, no COVER tag
+- OCR cache: 34
+- Drive + Vertex + OpenAI auth: all green
+- All 13 test scripts green; v3 dry-run byte-identical to s23 baseline
+- Admin UI on PID 33126; selection_state.json: s16 shape (1 folder + 1 file)
+
+### What shipped — #18 ✅ CLOSED
+
+**Design principles (written into display.py docstring):**
+
+1. Canonical display contract: `chunk_to_display(chunk, render_configs) -> dict` normalizes all 4 populations (v3 PDF, v3 Google Doc, legacy A4M, coaching) into uniform display fields. `format_context()` reads only these — zero per-pipeline branches in renderer code.
+
+2. Graceful degradation: `_clean()` normalizes `None`, `"Unknown"`, `"unknown"`, `"None"`, whitespace → `""`. Every resolver runs through it. Renderer uses `if field:` checks. No "Presenter: Unknown" artifacts ever.
+
+3. YAML-configurable visibility: Per-collection `render` blocks in agent YAML control which metadata fields surface to the LLM. Schema: 6 boolean knobs per collection. Missing block → defaults in `_DEFAULT_RENDER`. Retrieved chunks themselves are unchanged.
+
+4. Hardcoded non-negotiables: Client identifiers (`client_rfids`, `client_names`, `call_fksp_id`, `call_file`) NEVER render regardless of YAML. Enforced in:
+   - `_resolve_speaker()`: returns `""` for `rf_coaching_transcripts` unconditionally
+   - `_resolve_date()`: returns `""` for `rf_coaching_transcripts` unconditionally
+   - No resolver function reads the 4 protected fields at all
+   - Docstring calls out the contract; `_PROTECTED_FIELDS` constant documents intent
+
+**Files shipped:**
+
+```
+config/schema.py                                       +36 lines  (RenderConfig + 2 fields)
+rag_server/display.py                                  NEW, 260 lines
+rag_server/app.py                                      -63 lines / +13 lines  (branch renderer → wrapper)
+scripts/test_format_context_s24.py                     NEW, ~320 lines, 79/79 PASS
+scripts/test_format_context_s16.py                     1 assertion updated for canonicalization
+config/nashat_sales.yaml                               +citation_instructions +render block (reference_library only)
+config/nashat_coaching.yaml                            +citation_instructions +render block (both collections)
+```
+
+**Coverage of test_format_context_s24.py (79 cases, 0 failures):**
+
+- `_clean()` normalization: 9 cases (None, "", whitespace, Unknown/unknown/UNKNOWN, None literal, trim, int→str)
+- `chunk_to_display()` per-population:
+  - v3 PDF full metadata (7 field checks)
+  - v3 PDF degraded (missing link + locator) (3 checks)
+  - v3 Google Doc no-headings case (DFH shape, 3 checks)
+  - Legacy A4M full (4 checks)
+  - Legacy A4M speaker="Unknown" (normalization)
+  - Legacy A4M partial (only topic, no module number → "A4M: topic")
+  - A4M with zero metadata (source_label empty, text preserved)
+  - Coaching default: 6 visibility checks + 3 client-ID leak checks + 2 metadata-preservation checks
+  - Coaching missing topics
+- YAML render config overrides: 4 cases (override default, coaching date/speaker opt-in still protected, missing collection fallthrough, empty map fallthrough)
+- `format_context()` end-to-end: 7 scenarios × multiple assertions each, including critical safety test "coaching render no RFID/name/date/FKSP-ID/call-filename/coach-name"
+- Mixed-population render: 10 checks including RFID/name leak detection on integrated output
+- Unknown collection fallback: 3 checks (renders without crash, generic header, preserves text)
+
+**Verification against real Chroma chunks (post-implementation, pre-handover):**
+
+Pulled one real coaching chunk + one real v3 PDF chunk from production Chroma. Rendered with coaching agent's actual YAML render config. Output was clean:
+
+```
+COACHING CONTEXT (from real coaching sessions):
+
+--- Coaching Exchange 1 ---
+Topics: Stress/Cortisol|Labs General
+[chunk body text]
+
+REFERENCE KNOWLEDGE (A4M Fertility Certification + clinical guides):
+
+--- Reference 1 ---
+Source: Egg Health Guide.pdf — pp. 1-6 — 2026-03-28T15:21:09.415Z
+Link: https://drive.google.com/file/d/1oJyksHGx9wo_44k31MD3nTnfxnBKBMlL/view?usp=drivesdk
+[chunk body text]
+```
+
+No coaching metadata leaked — no `client_rfids`, `client_names`, `call_fksp_id`, `call_file`, `call_date`, or coach names surfaced. Original metadata on the chunk remains intact (verified `coaching_chunk['metadata']['client_rfids']` still contains the RFID for downstream systems).
+
+### Live observation — not a defect of this work
+
+The real coaching chunk body text contains speaker diarization labels like `[SPEAKER_03] Hello everybody hello dr christina can i ask you a quick question`. These are **inside the chunk document text**, not in metadata. They are not surfaced by any field the renderer reads; they're content that predates Layer B scrub. Session 15's /chat test confirmed Sonnet 4.6 handles these correctly in responses (absorbs, doesn't echo). This is the exact territory #6b scrub retrofit was proposed for and declined s23.
+
+**#6b reopen trigger (from s23) still applies** — the current handling is acceptable; the retrofit becomes necessary only if a future surface exposes raw chunk text directly to users or a future model echoes these tokens. No action this session.
+
+### What shipped — #20 CODE SHIPPED, A/B DEFERRED
+
+**Schema field:** `Behavior.citation_instructions: str` (default `""`, max 2000 chars, extra="forbid" honored).
+
+**Wiring:** `assemble_system_prompt()` appends the citation_instructions under a `CITATION GUIDANCE:` header when non-empty. Empty string → no guidance appended (preserves pre-s24 prompt structure exactly).
+
+**YAML text (sales agent, light-touch):**
+> When you reference specific facts from the retrieved knowledge, briefly note the source... Keep citations natural and light — don't interrupt the flow of a warm conversation. When the Source line in context includes page or section info, include it... When only the source name is shown, cite just the name. Never invent page numbers, links, or source titles.
+
+**YAML text (coaching agent, clinical transparency):**
+> When you reference specific clinical facts, protocols, or evidence from the retrieved knowledge, cite the source explicitly. When the Source line in context includes page or section info, include it... When a Link is shown in context, offer it to the client if they might want to read the full guide. Never invent page numbers, links, or source titles — if the citation info isn't in the context, cite what's available and stop there.
+
+**Both prompts instruct graceful degradation of citation:** if only source name is in context, cite just that; if nothing citable is in context, don't invent. This matters because many reference works have no speaker, no page locator, no link.
+
+**A/B deferred to s25.** ~$0.05 budget. Validation-only work; code merge doesn't depend on it.
+
+### What shipped — #17 DEFERRED (explicit reopen trigger)
+
+Finding during design: `chunk_to_display()` reads `source_file_name` (v3) / `module_number`+`module_topic` (legacy A4M) for the rendered source label, NOT `display_subheading`. The field is a dead-letter in the current retrieval path. Normalizing it now would be busywork.
+
+**Reopen trigger:** A surface appears that reads `display_subheading` (admin UI chunk browser, export pipeline, debugging tool, etc.) and rendering inconsistency becomes user-visible.
+
+Per the s23 "coupled items shouldn't be split casually" principle: #17 is coupled to a consumer that doesn't exist yet. #18's renderer is the consumer it was originally coupled to, but the design of #18 chose different canonical fields. Good outcome either way.
+
+### Regression verification
+
+- All 13 pre-existing test scripts green (200 individual checks)
+- New `test_format_context_s24.py`: 79/79 PASS (total suite: 14 scripts, 209 checks)
+- Both YAML files validate against updated schema (sales 468-char citation_instructions; coaching 574-char; 3 render blocks total)
+- Real-chunk render verified no protected-field leaks
+
+### Open items at session 24 close
+
+- BACKLOG #20 A/B validation — trivial scope for s25, ~$0.05
+- BACKLOG #35 (CONTENT_SOURCES.md) — HIGH priority, blocks bulk content ingestion
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — gated on #35
+- BACKLOG #21 (folder-selection UI redesign) — untouched
+- BACKLOG #17 — deferred w/ reopen trigger
+- BACKLOG #10 — Low priority, trigger-driven
+- BACKLOG #26(b) (`selectionState` retrofit) — folds into #21
+- Next v3 handler — still gated on #35
+- STATE_OF_PLAY s19-24 amendments — still deferred (HANDOVER captures everything)
+
+### Files modified
+
+```
+config/schema.py                    +36 lines (2 new fields, 1 new model, all backward-compatible)
+rag_server/app.py                   -63/+13 lines (inline renderer → wrapper + citation_instructions wiring)
+scripts/test_format_context_s16.py  +3/-7 lines (1 assertion updated for canonicalization)
+config/nashat_sales.yaml            +23 lines (citation_instructions + render block)
+config/nashat_coaching.yaml         +37 lines (citation_instructions + render block for both collections)
+docs/BACKLOG.md                     #18 RESOLVED, #20 code-shipped / A/B-pending, #17 deferred w/ trigger
+docs/HANDOVER.md                    (this entry)
+```
+
+### Files created
+
+```
+rag_server/display.py                       NEW, 260 lines
+scripts/test_format_context_s24.py          NEW, ~320 lines [79/79 PASS]
+docs/NEXT_SESSION_PROMPT_S25.md             NEW
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes
+- `ingester/*` — no scope
+- Coaching agent's legacy `format_context` behavior — migrated to canonical renderer; A/B deferral is only about Sonnet's response voice
+- STATE_OF_PLAY.md — HANDOVER captures everything
+
+### Session 24 spend
+
+~$0.001 total. Breakdown: ~$0.0001 Step 0 OpenAI smoke, ~$0.0001 Step 0 Vertex smoke, $0 for all code + test work. A/B deferral preserves the ~$0.05 for s25.
+
+### Lessons carried forward to session 25
+
+1. **Two-layer separation between retrieval and rendering is load-bearing.** When Dan flagged "we need to track clients across our system, but not cite them in responses" — both are true and need separation. Retrieval returns full metadata for downstream systems; rendering filters what the LLM sees. Bundling those concerns into one config knob would have created either a data leak or a lab-correlation blocker. The architectural answer: full retrieval, configurable rendering, code-hardened protection for the irreducibly-sensitive fields.
+
+2. **Code-enforced protection beats YAML-only protection for guardrail-critical fields.** The `show_client_identifiers` YAML knob was on the initial design. Dan's instinct to drop it was correct — a knob that could theoretically flip a guardrail is a knob that someday will be flipped by accident (or by an experiment that forgets to flip back). Hardcoded protection in `_resolve_speaker()`/`_resolve_date()` for coaching + no resolver at all for client ID fields = defense in depth.
+
+3. **"Unknown" as a literal metadata value is a common-enough pattern to deserve a first-class normalizer.** The M3 A4M transcripts have `speaker: "Unknown"` (the string). Rendering "Presenter: Unknown" is worse than rendering nothing. `_clean()` catches None, "Unknown" (case-insensitive), "None" (the string), and whitespace-only. Every resolver uses it. Cheap insurance.
+
+4. **Architecting YAML knobs AHEAD of concrete need is often architecturally wrong.** Initial design had mode-level citation_instructions overrides. Dan's guidance ("don't hardcode things that will limit it") pointed the right direction, but the correct response was still agent-level only for v1 — the mode-level override adds schema complexity with no concrete need today. If a mode appears that needs heavier citations than its parent agent (e.g., a4m_course_analysis mode), re-litigate then. The YAML schema stayed narrow.
+
+5. **End-to-end verification against real Chroma chunks caught nothing wrong but increased confidence dramatically.** ~5 minutes of work after tests green: pull one real chunk per population, render with real YAML config, diff against expected output. Would have caught any silent config-loading issue, schema-drift issue, or real-data edge case the synthetic fixtures missed. Worth doing on any render/retrieval change.
+
+### Chroma state at end of session 24 (UNCHANGED from session 23 close)
+
+- `rf_reference_library`: **605 chunks** (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

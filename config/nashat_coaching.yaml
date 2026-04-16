@@ -111,6 +111,22 @@ behavior:
   no_answer_message: "I don't have a clear answer for that one in my notes. Bring this to your next coaching call so we can work through it together — this is exactly the kind of thing that's better in real conversation. Anything else I can help with right now?"
   show_citations: true
 
+  # Session 24 (BACKLOG #20) — citation guidance.
+  # Coaching agent: clinical transparency matters. Cite sources explicitly
+  # when context includes them, including page/section when shown. Clients
+  # benefit from knowing where information comes from so they can trust it
+  # and read further if they want to.
+  citation_instructions: |
+    When you reference specific clinical facts, protocols, or evidence from
+    the retrieved knowledge, cite the source explicitly. When the Source
+    line in context includes page or section info, include it (e.g., "per
+    the Egg Health Guide, pp. 4-6" or "from Module 3 of the A4M
+    curriculum"). When only the source name is shown, cite just the name.
+    When a Link is shown in context, offer it to the client if they might
+    want to read the full guide. Never invent page numbers, links, or
+    source titles — if the citation info isn't in the context, cite what's
+    available and stop there.
+
   model_provider: "anthropic"
   model_name: "claude-sonnet-4-6"
   temperature: 0.4
@@ -226,6 +242,39 @@ knowledge:
     top_k: 8
     similarity_threshold: 0.65
     reranker_enabled: false
+
+  # Session 24 (BACKLOG #18) — per-collection rendering policy.
+  # Controls which metadata fields are surfaced to the LLM in context
+  # blocks. Retrieved chunks are unchanged — this only shapes what the
+  # model reads. Missing collections here fall through to sensible
+  # per-collection defaults in rag_server/display.py.
+  #
+  # Client identifiers (client_rfids, client_names, call_fksp_id,
+  # call_file) are NEVER surfaced regardless of these knobs — enforced
+  # in display.py code. Those fields remain fully available in
+  # chunk.metadata for downstream consumers (lab correlation, client
+  # tracking, analytics).
+  #
+  # Coaching show_speaker and show_date are intentionally false. Even if
+  # flipped to true in YAML, display.py hardcodes them as empty for
+  # rf_coaching_transcripts — coach names are absorbed per the character
+  # rules, and dates could correlate to identifiable client timelines.
+  render:
+    rf_coaching_transcripts:
+      show_source_label: false   # section header scopes; per-item label noise
+      show_speaker: false        # absorbed per character rules (hardcoded)
+      show_topics: true          # useful topic anchoring
+      show_locator: false
+      show_link: false
+      show_date: false           # protected (hardcoded)
+
+    rf_reference_library:
+      show_source_label: true
+      show_speaker: true
+      show_topics: true
+      show_locator: true
+      show_link: true
+      show_date: true
 
 # -----------------------------------------------------------------------------
 # AUDIENCE — quotas (forward-looking, not enforced yet in Phase 1)

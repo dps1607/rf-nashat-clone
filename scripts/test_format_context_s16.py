@@ -50,19 +50,15 @@ print("\n--- A4M render ---")
 print(a4m_out)
 
 check(
-    "A4M render contains module line",
-    "Module 7: Hormonal health" in a4m_out,
+    "A4M render contains module as Source line",
+    "Source: A4M Module 7: Hormonal health" in a4m_out,
 )
 check(
     "A4M render contains presenter line",
     "Presenter: Felice Gersh, MD" in a4m_out,
 )
 check(
-    "A4M render does NOT contain 'Source:' line (v3-only format)",
-    "Source:" not in a4m_out,
-)
-check(
-    "A4M render does NOT contain 'Link:' line (v3-only format)",
+    "A4M render does NOT contain 'Link:' line (no webViewLink on legacy)",
     "Link:" not in a4m_out,
 )
 check(

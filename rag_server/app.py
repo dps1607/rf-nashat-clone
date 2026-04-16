@@ -44,6 +44,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from shared.config_loader import ConfigLoader
 from config.schema import AgentConfig, Mode
+from rag_server.display import format_context as _format_context_v2
 
 
 # =============================================================================
@@ -179,6 +180,13 @@ def assemble_system_prompt(config: AgentConfig, mode: Mode) -> str:
         parts.append(mode.prompt_overlay.strip())
         parts.append("=" * 60)
 
+    # Session 24 (BACKLOG #20) — YAML-configurable citation guidance.
+    # Empty string means no guidance appended (preserves pre-s24 behavior).
+    if config.behavior.citation_instructions.strip():
+        parts.append("")
+        parts.append("CITATION GUIDANCE:")
+        parts.append(config.behavior.citation_instructions.strip())
+
     parts.append("")
     parts.append(
         "If you lack sufficient context from the retrieved knowledge, say so "
@@ -224,73 +232,19 @@ def retrieve_for_mode(question: str, mode: Mode) -> list[dict]:
 
 
 def format_context(chunks: list[dict]) -> str:
-    """Turn retrieved chunks into labeled context blocks for the LLM."""
-    if not chunks:
-        return ""
+    """Turn retrieved chunks into labeled context blocks for the LLM.
 
-    by_source: dict[str, list[dict]] = {}
-    for chunk in chunks:
-        by_source.setdefault(chunk["source"], []).append(chunk)
-
-    blocks: list[str] = []
-    if "rf_coaching_transcripts" in by_source:
-        blocks.append("COACHING CONTEXT (from real coaching sessions):")
-        blocks.append("")
-        for i, c in enumerate(by_source["rf_coaching_transcripts"], 1):
-            meta = c["metadata"]
-            blocks.append(f"--- Coaching Exchange {i} ---")
-            if meta.get("topics"):
-                blocks.append(f"Topics: {meta['topics']}")
-            blocks.append(c["text"])
-            blocks.append("")
-
-    if "rf_reference_library" in by_source:
-        blocks.append("REFERENCE KNOWLEDGE (A4M Fertility Certification + clinical guides):")
-        blocks.append("")
-        for i, c in enumerate(by_source["rf_reference_library"], 1):
-            meta = c["metadata"]
-            blocks.append(f"--- Reference {i} ---")
-            # Session 16 — v3-aware branch.
-            # v3 PDF/image/sheet/etc. chunks have v3_category populated;
-            # render source filename + page-range locator + webViewLink
-            # so Sonnet sees the human-readable citation. A4M chunks
-            # (legacy v1 ingest) have v3_category empty/missing and
-            # fall through to the original module/speaker render path
-            # unchanged. BACKLOG #18 tracks migrating the A4M path to
-            # session-9 normalized fields in a dedicated session.
-            if meta.get("v3_category"):
-                src_name = meta.get("source_file_name") or meta.get("display_source", "")
-                locator = meta.get("display_locator", "")
-                timestamp = meta.get("display_timestamp", "")
-                # Build a compact citation line, eliding empty fields
-                citation_bits = [src_name] if src_name else []
-                if locator:
-                    citation_bits.append(locator)
-                if timestamp:
-                    citation_bits.append(timestamp)
-                if citation_bits:
-                    blocks.append("Source: " + " — ".join(citation_bits))
-                web_link = meta.get("source_web_view_link", "")
-                if web_link:
-                    blocks.append(f"Link: {web_link}")
-            else:
-                # Legacy A4M render path — UNCHANGED from pre-session-16
-                if meta.get("module_number") and meta.get("module_topic"):
-                    blocks.append(f"Module {meta['module_number']}: {meta['module_topic']}")
-                if meta.get("speaker"):
-                    blocks.append(f"Presenter: {meta['speaker']}")
-            blocks.append(c["text"])
-            blocks.append("")
-
-    if "rf_published_content" in by_source:
-        blocks.append("PUBLISHED CONTENT (Dr. Nashat's own writing/teaching):")
-        blocks.append("")
-        for i, c in enumerate(by_source["rf_published_content"], 1):
-            blocks.append(f"--- Published {i} ---")
-            blocks.append(c["text"])
-            blocks.append("")
-
-    return "\n".join(blocks)
+    Session 24 (BACKLOG #18): migrated to the canonical renderer in
+    rag_server/display.py. Per-collection rendering policy is controlled
+    via the agent YAML's knowledge.render block (falls through to
+    sensible per-collection defaults if unset). Client identifiers
+    (client_rfids, client_names, call_fksp_id, call_file) are never
+    surfaced to the LLM regardless of config — enforced in display.py.
+    """
+    return _format_context_v2(
+        chunks,
+        render_configs=config_loader.config.knowledge.render,
+    )
 
 
 # =============================================================================
