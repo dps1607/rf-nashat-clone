@@ -2611,3 +2611,100 @@ docs/NEXT_SESSION_PROMPT_S23.md           (s23 bootstrap prompt, full rules carr
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+
+---
+
+## Session 23 — strategic re-baseline + process-improvement docs (2026-04-15)
+
+**Outcome:** Zero code changes, zero Chroma writes, zero spend. Step 0 ran clean against s22 baseline (no drift). Strategic scope re-baselined: #6b coaching scrub retrofit DECLINED by Dan, removing the headline liability-closure rationale from the original Option A bundle. Process-improvement items #28 and #26(a) incorporated into the s24 prompt's flight rules (carries forward via standard mechanism). #10 (requirements.txt reconcile) re-prioritized from Medium → Low with a trigger-driven disposition. s24 prompt written teeing up #18 + #20 (+#17 bundle candidate) as the next session's main retrieval-quality work.
+
+### Step 0 reality check — all sub-checks PASS, no drift from s22
+
+- Repo at `624d6de`, working tree clean (ahead of origin by 6 — Dan's territory)
+- `rf_reference_library`: 605 (unchanged)
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc)
+- Metadata coverage: `extraction_method` 8/8, `library_name` 8/8, `source_file_md5` 7/8 (Google Doc empty by Drive-API design), `content_hash` 8/8
+- Sugar Swaps strip-ON in production: len 3737, no canva.com, no COVER tag
+- OCR cache: 34
+- Drive auth, Vertex AI auth (max_output_tokens=50 per s22 lesson), OpenAI auth (3072 dims): all green
+- Test suite: 13/13 scripts green (admin_save 16/16 with snapshot/restore working — s22 #31 fix held)
+- v3 dry-run: 9 chunks / `{pdf:1, v2_google_doc:2}` / est_tokens ~7,603 / $0.0010 / vision_cache_hit / no stage-1 skips
+- Admin UI on PID 33126, `Cache-Control: no-store` confirmed
+- selection_state on disk: s16 shape (1 folder + 1 file → rf_reference_library)
+
+### Scope decision
+
+Initial Option A recommendation (retrofit bundle: #6b + #18 + #17 + #20) was anchored on #6b as the headline liability-closure. Dan declined #6b — the scrub retrofit on `rf_coaching_transcripts` is not a current build priority; the current Sonnet 4.6 handling of these references in raw chunk payloads is acceptable.
+
+Re-baselined options presented. Dan picked **Option G**:
+- #28 + #26(a) doc additions to standing session prompts (incorporated into s24 prompt flight rules)
+- #10 marked as trigger-driven (do when fresh venv actually needed)
+- s24 prompt written teeing up #18 + #20 (+#17 bundled) as next session's main retrieval-quality work
+
+Tech-lead concerns flagged before the pick:
+1. #18/#17/#20 are coupled — `chunk_to_display(chunk)` helper from #18 is what *renders* `display_subheading` to the user, so #17 alone is mostly busywork until #18 lands
+2. #10 has hidden tail-risk — pip freeze dumps 100+ packages, pruning is judgment work, verification means rebuilding venv, worst case bundles unrelated breakage with prompt-engineering decisions
+3. Bundling all 5 (#18+#17+#20+#10+#28) would dilute focus across three unrelated domains (retrieval code, persona prompts, requirements.txt)
+
+### What shipped — process improvements ✅ INCORPORATED
+
+**BACKLOG #28 closed-via-process:** "When closing a BACKLOG item, the closure note must include a verification step in the environment where the bug was originally reported. For UI bugs, real browser click-through. For data bugs, query against the live collection." Now in s24 prompt flight rules under "Verification & debugging."
+
+**BACKLOG #26(a) closed-via-process:** "Test admin UI in Chrome before Safari." Now in s24 prompt flight rules. Part (b) — `selectionState` retrofit — remains open and folds into #21 UI redesign for free.
+
+**BACKLOG #10 re-prioritized:** Medium → Low. Trigger-driven disposition documented inline: do when fresh venv is actually needed (new collaborator, new machine, Railway lockfile drift surfaces a real bug, session starts with a `pip install` that fails). Otherwise it's debt, not a wound.
+
+**BACKLOG #6b annotated DECLINED:** Future sessions should not re-propose this as a strategic next step. If a real downstream surface change makes it newly necessary (future model surfacing raw chunk text directly to users, logging change exposing them), reopen with the new trigger documented.
+
+### Files modified
+
+```
+docs/BACKLOG.md                           (#28 closed-via-process, #26 part-a closed-via-process, #10 re-prioritized, #6b annotated DECLINED)
+docs/HANDOVER.md                          (this entry)
+docs/NEXT_SESSION_PROMPT_S24.md           (created — supersedes S23 prompt)
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes
+- `ingester/*`, `rag_server/*`, `admin_ui/*` — no code changes
+- All test scripts — no changes
+- `.env`, `data/selection_state.json`, `data/*` — no changes
+- `docs/STATE_OF_PLAY.md` — not amended (HANDOVER s19/20/21/22/23 entries supersede)
+
+### Session 23 spend
+
+~$0 total. Step 0 OpenAI + Vertex auth smoke pings ~$0.0001 combined. No code work, no Chroma writes, no chat calls.
+
+### Lessons carried forward to session 24
+
+1. **Re-baseline scope when a strategic input changes mid-session.** The Option A bundle (#6b + #18 + #17 + #20) made sense as a coherent unit *because of* #6b's liability-closure rationale. Once Dan declined #6b, the bundle's strategic justification collapsed and the right move was to re-derive the recommendation from the remaining items, not to mechanically execute "the bundle minus #6b." The remaining three are still good work, but the urgency framing was specific to #6b.
+
+2. **Coupled items shouldn't be split casually.** #17's BACKLOG entry explicitly recommends bundling with #18 because the cosmetic improvement (display_subheading normalization) is invisible to users until `format_context()` actually renders the normalized field. Doing #17 standalone would have been busywork. Process-improvement items don't have this coupling — they slot into the per-session prompt independently.
+
+3. **Trigger-driven beats time-driven for low-urgency infrastructure debt.** #10 (requirements.txt reconcile) reads as "1 hour of cleanup" but reality includes dependency-pruning judgment, fresh-venv rebuild, full test re-run, and tail-risk of subtle version conflicts that bundle with unrelated work. Better disposition: defer until a real trigger surfaces (failed `pip install`, fresh-environment need). This is the same principle as the s18 build-discipline frame applied to debt items rather than feature items.
+
+4. **"Standing session prompt" means the per-session prompt, not a separate template file.** When BACKLOG items say "incorporate into standing prompt," the mechanism is to add the rule to the next session's prompt under flight rules; from there it carries forward via the existing "carries forward unchanged" convention. There is no template to edit.
+
+5. **Zero-write sessions are valid build progress when they retire optionality.** s22 was zero-write (test fix). s23 was zero-write (strategic re-baseline + process docs). Both consumed real budget by removing future ambiguity — s22 closed a foot-gun that would have bitten any UI-iteration session, s23 closed a strategic question (#6b) that was anchoring future scope discussions and incorporated two process improvements that would otherwise re-litigate every session. Build discipline doesn't require a Chroma write to count as progress.
+
+### Open items at session 23 close
+
+- BACKLOG #18 (`format_context()` migration) — primary retrieval-quality item, teed up for s24
+- BACKLOG #20 (inline citation prompting) — bundle with #18 in s24
+- BACKLOG #17 (display_subheading normalization) — bundle with #18 in s24 (cosmetic but invisible without #18's renderer)
+- BACKLOG #21 (folder-selection UI redesign) — biggest UI friction point, dedicated future session
+- BACKLOG #35 (CONTENT_SOURCES.md) — HIGH priority, blocks bulk content ingestion; needs ~1hr conversation with Dan
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — gated on #35
+- BACKLOG #10 (requirements.txt) — Low priority, trigger-driven only
+- BACKLOG #26(b) (`selectionState` retrofit) — folds into #21
+- Next v3 handler (plaintext / sheets / slides / images / av) — handler work technically unblocked but #35 gates commits
+- STATE_OF_PLAY session 19-23 amendments — still deferred
+
+### Chroma state at end of session 23 (UNCHANGED from session 22 close, which was UNCHANGED from session 21 close)
+
+- `rf_reference_library`: **605 chunks** (no writes since s21)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

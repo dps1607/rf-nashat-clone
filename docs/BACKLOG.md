@@ -152,7 +152,13 @@ traceback, the exact curl command, the loaded agent, and the loaded
 mode. Without those, the next investigation will hit the same dead
 end.
 
-### 6b. Scrub retrofit liability is now CONCRETE (upgraded from #3)
+### 6b. Scrub retrofit liability is now CONCRETE (upgraded from #3) — DECLINED session 23
+**Priority:** Declined / not pursuing.
+
+**Decision (session 23):** Dan declined the coaching scrub retrofit. The current Sonnet 4.6 handling of these references in raw chunk payloads is acceptable; the retrofit is not a current build priority. Future sessions should not re-propose this as a strategic next step. If a real downstream surface change makes it newly necessary (e.g., a future model that surfaces raw chunk text directly to users, or a logging change that exposes them), reopen with the new trigger documented.
+
+**Original scope (now historical):**
+
 **Priority:** Medium → raised to Medium-High based on session 15 observation.
 
 **Observation (session 15, via coaching agent `/chat` test):** A single
@@ -428,6 +434,12 @@ Today, retrieval always returns top-N regardless of similarity scores.
 ---
 
 ### 10. Reconcile requirements.txt with venv state
+**Priority:** Low (revised session 23). Real but trigger-driven, not time-driven.
+
+**Revised disposition (session 23):** Do this when you actually need a fresh venv — new collaborator, new machine, Railway lockfile drift surfaces a real bug, or a session starts with a `pip install` that fails. Don't bundle pre-emptively. The "1 hour" estimate is optimistic: `pip freeze` dumps 100+ packages including dev cruft and transitive deps; pruning requires judgment ("is `cffi` needed or transitive?"); verification means building a fresh venv and running all 13 test scripts. Worst case: a new requirements.txt that breaks something subtle (e.g., Vertex SDK version mismatch) bundled with unrelated work. Local works, Railway works, tests pass. It's debt, not a wound.
+
+**Original scope (still applies when triggered):**
+
 **Priority:** Medium.
 
 **Scope:** The local venv has drifted from `requirements.txt`. v2's Google/Vertex
@@ -774,7 +786,15 @@ because the visual feedback for "what's selected" needs to make the answer obvio
 
 ---
 
-### 26. Admin UI Safari testing protocol + selectionState retrofit
+### 26. Admin UI Safari testing protocol + selectionState retrofit — PART (a) INCORPORATED session 23 — ⚠ PART (b) STILL OPEN
+**Priority:** Medium (part b only).
+
+**Part (a) closure (session 23):** "Test admin UI in Chrome before Safari" rule incorporated into NEXT_SESSION_PROMPT_S24.md flight rules under "Verification & debugging." Carries forward via the standard mechanism.
+
+**Part (b) still open:** `selectionState` retrofit — pending panel render path still uses `selectionState` and can drift out of sync with DOM in edge cases. Strong recommendation to fold into #21 (UI redesign) which removes the pending panel entirely. Effort then becomes free.
+
+**Original scope (now historical for part a):**
+
 **Priority:** Medium.
 
 **Scope:** Two related items from session 16's Bug 3:
@@ -824,7 +844,13 @@ License — download once, ship locally.
 
 ---
 
-### 28. Verify BACKLOG closures end-to-end in the environment where they manifested
+### 28. Verify BACKLOG closures end-to-end in the environment where they manifested — INCORPORATED session 23 — ✅ CLOSED-VIA-PROCESS
+**Priority:** Closed.
+
+**Closure (session 23):** Incorporated into NEXT_SESSION_PROMPT_S24.md flight rules under "Verification & debugging." Carries forward to all subsequent session prompts via the standard "carries forward unchanged" mechanism. No standalone template file exists; the rule lives in the per-session prompt.
+
+**Original scope (now historical):**
+
 **Priority:** Process improvement.
 
 **Scope:** Session 15 marked BACKLOG #4 (toast bug) "fixed" based on a CSS
