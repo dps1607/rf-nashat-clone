@@ -1283,7 +1283,16 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 
 ---
 
-### 43. Phase 3.5 `ruamel.yaml` fix in `admin_ui/forms.py` (pre-Dr.-Nashat-sharing blocker)
+### 43. Phase 3.5 `ruamel.yaml` fix in `admin_ui/forms.py` (pre-Dr.-Nashat-sharing blocker) — ✅ RESOLVED session 27 (already-resolved, verified)
+
+**Resolution (s27):** Reality check on session open found `admin_ui/forms.py` **already uses `ruamel.yaml` in round-trip mode** (`YAML(typ="rt")`, `preserve_quotes=True`, `width=4096`). There is no `yaml.safe_dump` call anywhere in the codebase. The fix described below was done at some prior session without being logged as a #43-equivalent closure; s26 added this item on a misread of code state.
+
+**Verification test ran s27** (`/tmp/rf_s27_b0_yaml_roundtrip.py`, not retained in repo): load-dump-reload cycle against both agent YAMLs. Result: **both `nashat_sales.yaml` (13,871 bytes, 259 lines) and `nashat_coaching.yaml` (15,130 bytes, 297 lines) round-trip byte-identical.** `behavior.citation_instructions` preserved exactly (sales 468 chars, coaching 574 chars — matches CURRENT STATE assertions). Parsed structure identical across round-trip.
+
+**Unblocks:** #42 (Railway sync) may proceed without this work.
+
+**Original scope text (kept as history for anyone cross-referencing):**
+
 **Priority:** HIGH if Dr. Nashat is about to touch the Railway URL. Medium otherwise.
 
 **Scope:** `admin_ui/forms.py` currently uses PyYAML's `yaml.safe_dump` to serialize YAML back to disk after edits in the admin UI. Two problems:

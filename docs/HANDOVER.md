@@ -3175,3 +3175,97 @@ docs/HANDOVER.md                   (this entry)
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+---
+
+## Session 27 — BACKLOG #43 closed (already-resolved, verified) + Railway code-state discovery; #42 chroma sync deferred to s28 (2026-04-16)
+
+**Outcome:** Opened session intending scope B (#43 ruamel.yaml fix + #42 Railway sync) + D (#21 UI redesign). Instead discovered two governance realities during Step 0 / B scope reading: (1) #43 describes a problem that doesn't exist — `admin_ui/forms.py` already uses `ruamel.yaml` round-trip, verified byte-identical on both agent YAMLs; (2) Railway's `/app` is at commit `4ffbfe4` (s26) per a git push from an internet-interrupted prior session, meaning **code is already synced** but `/data/chroma_db` content equivalence vs local was not verified in the remaining budget. Net: #43 closed, #42 stays open with narrowed scope (chroma content verification only), D deferred to s28. Zero Chroma writes. No new code. Spend: $0.
+
+### Step 0 reality check — PASS with one author-error recovery
+
+- Repo at `4ffbfe4` (s26), working tree clean
+- **Author error:** my first Step 0 chroma check used `PersistentClient(path='chroma_db')` — a relative path. From cwd=`rf-nashat-clone`, Chroma silently auto-created an empty 184KB stub at `rf-nashat-clone/chroma_db/`. Caused a ~30-minute drift-panic investigation before I realized I had caused it. Canonical chroma at parent dir `/Users/danielsmith/Claude - RF 2.0/chroma_db` (485MB, via `CHROMA_DB_PATH` in `.env`) was untouched. Cleaned up the stub. **Foot-gun logged as potential BACKLOG candidate** (see "F3" in open items).
+- rf_reference_library: 605 ✓ / v3 chunks: 8 (7 pdf + 1 v2_google_doc via `source_pipeline=drive_loader_v3`) ✓ / Sugar Swaps strip-ON (len 3737, no canva, no COVER tag) ✓ / OCR cache: 34 files at `data/image_ocr_cache` ✓ / auth green ✓ / latest dry-run matches s24 baseline ($0.000988 / 9 chunks) ✓ / admin UI PID 78159 on 5052 with `Cache-Control: no-store` ✓
+
+**Three prompt-text drifts documented but not escalated** (NEXT_SESSION_PROMPT_S27 content, not data drift):
+- Prompt described v3 metadata fields as `rf_ingest_version/schema_version/source_type/title`; reality is `extraction_method / library_name / content_hash / source_file_md5` + `v3_category / v3_extraction_method / source_pipeline`. CURRENT STATE line 30 has the correct names.
+- Prompt implied OCR cache at `data/ocr_cache`; reality `data/image_ocr_cache`.
+- Prompt said "14 test scripts"; scripts/ has 20 `test_*.py` files (14 in the regression suite per CURRENT STATE line 60; extras are live-API one-shots + stale older-session versions).
+
+### Step 1 + Step 1.5 — both clean
+
+Step 1 tiered reading (CURRENT STATE + HANDOVER s26 only) worked as designed — saved substantial context vs full STATE_OF_PLAY + HANDOVER reads. Step 1.5 quick-check found no new drift. ADR_003 remains `PROPOSED — design deferred` (known, documented in CURRENT STATE "Known gaps"). Drift marker #41 still 1/3. No new closures since s26 (expected — s27 just opened).
+
+### #43 closure — the first "already-resolved" discovery
+
+Reading `admin_ui/forms.py` for scope-B planning revealed the file already imports `ruamel.yaml` and uses `YAML(typ="rt")` with `preserve_quotes=True`, `width=4096`. Zero `yaml.safe_dump` calls anywhere in the codebase (full Grep confirmed). The docstring at lines 11-14 explicitly calls out the exact anti-pattern #43 describes, explaining *why* the code already uses ruamel.
+
+**Verification test (`/tmp/rf_s27_b0_yaml_roundtrip.py`, not retained):** load → dump → reload cycle on both `nashat_sales.yaml` and `nashat_coaching.yaml`. Result: **byte-identical** round-trip on both (13,871 / 15,130 bytes respectively, 259 / 297 lines). `behavior.citation_instructions` preserved with character count matching CURRENT STATE assertion (sales 468, coaching 574). Parsed structure identical across round-trip. #43 closed.
+
+Best interpretation: ruamel fix was made at some prior session (the docstring's polish and the existence of `ruamel.yaml>=0.18.0` explicitly pinned in requirements.txt suggest this was intentional work, not accidental). s26 added the BACKLOG entry on a misread of code state during governance reset. The Step 1.5 audit didn't catch it because it wasn't looking at code vs BACKLOG alignment.
+
+### #42 narrowed scope — code synced, chroma content unverified
+
+Railway probe found `/app` at mtime today 14:20, with `rag_server/display.py` (358 lines, s24 canonical renderer), both YAMLs containing `citation_instructions`, and `docs/HANDOVER.md` containing s24-s26 entries. This was a git auto-deploy from an earlier this-session push that happened during internet interruption.
+
+`/data/chroma_db` shows 485M / 55 files / 5 UUIDs matching local exactly — **but file-structure equality is not content equality.** Chroma UUIDs remain stable across upserts, so matching UUIDs could simply mean the original bootstrap structure persists with stale pre-s21 content inside. A content query via railway ssh was attempted twice and failed (stdin-piped script hung; inline command hit system python without chromadb).
+
+**#42 scope therefore narrows to a single s28 verification query + (if needed) Z1 tarball sync.** If the query shows 8 v3 chunks + Sugar Swaps strip-ON already on Railway, #42 closes as already-resolved too. If not, Z1 per the `HANDOVER_PHASE3_COMPLETE.md` playbook.
+
+### D (#21 UI redesign) — deferred to s28
+
+Context pressure from the #42 investigation left no safe budget for UI work. Clean defer; no partial work.
+
+### Files modified
+
+```
+docs/BACKLOG.md          #43 marked ✅ RESOLVED s27 with resolution note + verification evidence
+docs/STATE_OF_PLAY.md    Railway sync bullet updated (#43 ✅ ALREADY RESOLVED → #42 unblocked);
+                          priorities section marked #43 resolved
+docs/HANDOVER.md         this entry
+docs/NEXT_SESSION_PROMPT_S28.md   new, minimal (s27 bootstrap pattern carries forward unchanged)
+```
+
+### Files NOT touched (intentional)
+
+- `admin_ui/forms.py` — no change needed (ruamel already in place)
+- `chroma_db/*` — no writes (per anti-goal)
+- `config/*` — no scope
+- `rag_server/*` — no scope
+- The three demoted plan docs (ARCHITECTURE, REPO_MAP, COACHING_CHUNK_CURRENT_SCHEMA)
+
+### Session 27 spend
+
+$0 total. No LLM calls. Governance work + code reading + one local YAML round-trip test.
+
+### Lessons carried forward to session 28
+
+1. **"Already-resolved on reading" is the second governance-drift pattern.** s26 audit caught the "stale plan doc" pattern. s27 caught the "BACKLOG claims X is broken, but code disagrees" pattern. Both root-cause to the same thing: plan docs + code drift independently, and the only thing that detects the divergence is a cheap audit that actually touches both surfaces. Step 1.5 quick-check should gain a third line in a future session: "grep 1 active HIGH-priority BACKLOG item at random, sanity-check its stated premise against code."
+
+2. **Relative-path PersistentClient is a foot-gun.** Chroma silently auto-creates empty databases if the target path doesn't exist. From the wrong cwd, an innocent `path='chroma_db'` produces a stub that mimics data loss, costs context on investigation, and in a worse scenario could mask a real missing-data bug. Guard candidate: in `ingester/loaders/_drive_common.py` or a shared helper, refuse to open a Chroma path that (a) is relative and (b) doesn't exist — force the caller to go through `CHROMA_DB_PATH`. Logged as F3 in open items.
+
+3. **The "intermittent session" phenomenon is real and should be handled.** s27 opened after a broken prior session that had pushed commits mid-work. This produced unexpected Railway state that looked like "someone secretly synced Railway." Next session prompts should include a "check origin/main vs HEAD locally" step so prior-session ghosts surface immediately instead of mid-scope.
+
+4. **Prompt-text drift is a new maintenance axis.** s27's prompt described v3 metadata fields with wrong names. The field names had been documented correctly in CURRENT STATE all along. Fix is to copy field names from CURRENT STATE into session prompts rather than paraphrasing. Low priority but worth a BACKLOG entry if it recurs.
+
+### Open items at session 27 close
+
+- BACKLOG #35 (HIGH) — CONTENT_SOURCES.md, still blocking bulk ingestion
+- BACKLOG #36 — April-May 2023 Blogs.docx (gated on #35)
+- BACKLOG #40 — Coaching link-surfacing A/B (~$0.25)
+- BACKLOG #21 — Folder-selection UI redesign (deferred from s27)
+- BACKLOG #42 — Railway chroma sync — **NEW SCOPE:** verify Railway chroma content matches local; Z1 only if it doesn't. $0 if already synced, $0.05 if Z1 needed.
+- BACKLOG #17 — deferred w/ reopen trigger
+- BACKLOG #6b — declined
+- **F3 (new, unnumbered)** — guard against `PersistentClient` silent empty-chroma creation on wrong relative paths. Small, ~15 lines + test. Could fold into any session that touches `_drive_common.py`.
+- **F1/F2 (new, unnumbered, tiny)** — NEXT_SESSION_PROMPT_S28 content fix: reference CURRENT STATE field names verbatim instead of paraphrasing; correct OCR cache path.
+- Next v3 handler — gated on #35
+- **Full Step 1.5 audit next due: session 31** (every 5 sessions; s26 was the last)
+
+### Chroma state at end of session 27 (UNCHANGED — zero writes this session)
+
+- `rf_reference_library`: **605 chunks** (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

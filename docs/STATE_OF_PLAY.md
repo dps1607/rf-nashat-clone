@@ -89,8 +89,8 @@ test_format_context_s24.py             (79/79)
 2. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #35)
 3. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
 4. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point)
-5. **BACKLOG #42 NEW s26 — Railway sync backlog** (local is s21–s25 ahead of production)
-6. **BACKLOG #43 NEW s26 — Phase 3.5 ruamel.yaml fix** in `admin_ui/forms.py` before sharing Railway URL with Dr. Nashat
+5. **BACKLOG #42 NEW s26 — Railway sync backlog** (local is s21–s25 ahead of production; unblocked by #43 closure s27)
+6. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session, verified via byte-identical YAML round-trip test)
 
 ## What's declined (do not re-propose)
 
@@ -110,7 +110,7 @@ Local is ahead of Railway by these closures. No single change is large but they 
 - s21: 8 v3 chunks backfilled with s19 metadata fields; Sugar Swaps strip-ON in production Chroma
 - s24: `rag_server/display.py` canonical renderer + both agent YAMLs (`citation_instructions` + `knowledge.render` blocks)
 - s25: no code changes (A/B validation only) — YAML citations verified ship-as-is
-- Phase 3.5 `ruamel.yaml` fix (BACKLOG #43) must land BEFORE sharing Railway URL with Dr. Nashat — current `yaml.safe_dump` in `admin_ui/forms.py` can corrupt multi-line YAML strings
+- **#43 `ruamel.yaml` fix: ✅ ALREADY RESOLVED** — s27 reality check found `admin_ui/forms.py` already uses `ruamel.yaml` round-trip; byte-identical load/dump/reload test on both agent YAMLs passed s27. #42 unblocked.
 
 ## Governance model (established s26)
 
