@@ -1259,3 +1259,47 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 **Anti-scope:** do not edit YAML pre-emptively on n=1.
 
 **Estimated effort (if promoted):** ~30 min YAML adjustment + A/B re-run on sales queries only, ~$0.15 spend.
+
+---
+
+## NEW — added session 26 (2026-04-16, governance reset)
+
+### 42. Railway sync backlog (s21–s25 local changes not in production)
+**Priority:** Medium. Becomes HIGH the moment Dr. Nashat wants to test anything production-visible.
+
+**Scope:** Local is ahead of Railway by the following closures, none individually large, but accumulating. No Railway sync has happened since the s20/s21 window.
+
+- **s21:** 8 v3 chunks backfilled with s19 metadata fields (`extraction_method`, `library_name`, `content_hash`, `source_file_md5`). Sugar Swaps Google Doc chunk re-ingested with Canva strip-ON (empirically verified matches s20 A/B winner).
+- **s24:** `rag_server/display.py` canonical renderer (NEW, 260 lines). `rag_server/app.py` migrated to wrapper pattern. `config/schema.py` extended with `Behavior.citation_instructions` + `Knowledge.render`. Both agent YAMLs (`nashat_sales.yaml`, `nashat_coaching.yaml`) updated with `citation_instructions` text + per-collection `render` blocks.
+- **s25:** No code changes (A/B validation run only). Script `test_citation_instructions_ab_live_s25.py` retained for on-demand re-validation. YAML citation text verified ship-as-is.
+
+**Execution:** tarball + bootstrap via cloudflared quick tunnel, per the documented Phase 3.5 playbook. ~6 minutes wall clock once #43 (ruamel.yaml fix) lands.
+
+**Blocker:** #43 must ship first — current `yaml.safe_dump` in `admin_ui/forms.py` can corrupt multi-line YAML strings in production if Dr. Nashat edits either agent YAML via the admin UI (the s24 citation_instructions are multi-line and would be at risk).
+
+**Anti-scope:** no new features bundled into the sync. Ship the accumulated closures, verify, then resume feature work. The sync itself is not the time to ship anything that isn't already local-stable and test-green.
+
+**Estimated effort:** ~1hr (sync + smoke test on production URL + spot-check both agents via /chat against production). Spend: ~$0 (sync is free; smoke-test is a few Sonnet calls on the live endpoint, ~$0.05).
+
+---
+
+### 43. Phase 3.5 `ruamel.yaml` fix in `admin_ui/forms.py` (pre-Dr.-Nashat-sharing blocker)
+**Priority:** HIGH if Dr. Nashat is about to touch the Railway URL. Medium otherwise.
+
+**Scope:** `admin_ui/forms.py` currently uses PyYAML's `yaml.safe_dump` to serialize YAML back to disk after edits in the admin UI. Two problems:
+
+1. **Strips comments.** Any human-authored commentary in the agent YAMLs is silently lost on first save.
+2. **Can corrupt multi-line strings.** The s24 `citation_instructions` field on both agents is ~470–580 chars of multi-line text. `yaml.safe_dump` has been observed to emit these in formats that don't round-trip cleanly (one prior incident corrupted `nashat_coaching.yaml`, caught and reverted before committing). With s24 citation_instructions in place, this risk is now live on every YAML save.
+
+**Fix:** swap `yaml.safe_dump` → `ruamel.yaml` round-trip API (`YAML(typ='rt')`). Preserves comments, preserves multi-line string formatting, preserves key ordering. Standard substitution; ruamel.yaml is already a transitive dep of a few packages in the stack.
+
+**Files touched:**
+- `admin_ui/forms.py` — swap the dump call; update any load call that needs to match
+- `requirements.txt` — pin `ruamel.yaml` explicitly (currently transitive)
+- New test: `scripts/test_yaml_roundtrip_s<N>.py` — load both agent YAMLs, dump via new path, re-load, assert equality of parsed structure AND presence of the multi-line citation_instructions field formatted correctly
+
+**Anti-scope:** do not refactor adjacent form-handling logic. Pure library swap.
+
+**Estimated effort:** ~45 min including the round-trip test. Spend: $0.
+
+**Required before:** BACKLOG #42 (Railway sync) — the sync will ship the s24 citation_instructions to production, at which point Dr. Nashat saving either YAML via the admin UI could trigger the corruption path. Do #43 first, then #42.

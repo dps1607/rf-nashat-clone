@@ -3032,3 +3032,146 @@ The new A/B script is **NOT** added to the Step 0 test suite, despite being a "t
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+
+---
+
+## Session 26 — governance reset: CURRENT STATE canonicalization + update triggers + Step 1.5 permanent (2026-04-16)
+
+**Outcome:** Governance controls installed to prevent the ~s13-era plan-doc drift discovered during Step 1.5 audit. STATE_OF_PLAY.md rewritten with a canonical CURRENT STATE section at the top. DECISIONS.md gained 3 entries (#6b decline, #17 defer, s26 reset rationale). BACKLOG gained #42 (Railway sync backlog) + #43 (ruamel.yaml fix). NEXT_SESSION_PROMPT_S27.md installed Step 1.5 as permanent (tiered), shrunk default Step 1 reading, and documented Claude Code 1M as an option for context-heavy sessions. Zero Chroma writes. Zero code changes. Spend: ~$0.001 (Step 0 auth smokes).
+
+### Scope decision
+
+Dan opened s26 wanting to "get fully back on track with all of our controls and governing procedures." Tech-lead recommended full governance reset over the specific tactical scopes (A/B/C/D/E) in the original s26 prompt. Dan approved Approach β: prepend canonical CURRENT STATE section to STATE_OF_PLAY rather than replacing the document outright.
+
+### Step 0 reality check — all sub-checks PASS, no drift from s25
+
+- Repo at `395d2f9` (s25), working tree clean
+- `rf_reference_library`: 605 (unchanged since s21)
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc), all 4 s19 metadata fields populated
+- Sugar Swaps strip-ON in production
+- OCR cache: 34
+- Drive + Vertex + OpenAI auth: all green
+- All 14 test scripts green
+- v3 dry-run byte-identical to s24 baseline
+- Canonical renderer + both YAMLs validate
+- Admin UI on PID 78159
+
+### Step 1.5 full audit — completed, exposed the drift
+
+The first full 1.5 audit (per s26 prompt requirement) surfaced:
+
+**1.5.a BACKLOG table:** 43 numbered items reviewed (post-#42/#43 addition). All closures verified on disk. Status column + plan-doc alignment column generated.
+
+**1.5.b build-step audit:** Data plane, ingestion, retrieval/rendering, agents, admin UI, deployment, content SoT, testing — each one-line status.
+
+**1.5.c plan-doc drift report: 4 material items, exceeding the >3 flag threshold:**
+1. STATE_OF_PLAY.md stops at s18; §415 and §493 still list BACKLOG #6b/#17/#18/#20 as the "retrofit bundle" — 3 of 4 are dead-lettered
+2. ADR_003 reads "PROPOSED — design deferred" even though #29 shipped s19 code + s20 A/B
+3. DECISIONS.md has no entry for #6b decline (s23) or #17 defer (s24) despite BACKLOG claiming both are "captured"
+4. REPO_MAP.md predates `rag_server/display.py`, all handler modules, all s17+ test scripts
+
+**1.5.d drift-marker tracker:** #41 (sales emoji) still 1/3. No other active markers.
+
+### Why the drift happened (root-cause analysis during s26)
+
+1. **No trigger for plan-doc updates.** HANDOVER/BACKLOG get written every session because the protocol demands it. STATE_OF_PLAY / ARCHITECTURE / DECISIONS / REPO_MAP / ADRs have no update trigger — they only change when a session explicitly scopes to edit them, which hasn't happened since s18.
+2. **STATE_OF_PLAY's amendment-log structure invites drift.** "Session N amendment" appended over and over; front of doc ages; nobody rewrites the top.
+3. **ADR status fields are free-text with no propagation from BACKLOG closures.**
+4. **No cheap audit gate.** Step 0 verifies data and code. Nothing verified docs. s26 was the first session with a Step 1.5 requirement — and it caught exactly what it was designed to catch on its first run.
+
+### What shipped — governance controls installed
+
+**1. STATE_OF_PLAY.md rewrite (Approach β — prepend, don't replace):**
+- New `# CURRENT STATE (as of session 26, 2026-04-16)` section at the top (~1,150 words)
+- Covers: what's live (Railway + local), data plane (exact chunk counts + metadata status), code plane (ingestion / retrieval+rendering / agents / admin UI), testing (14-script Step 0 suite + live-API one-shots + cost floor), what's next (5 items incl. new #42/#43), what's declined (table with reopen triggers), Railway sync backlog, governance model, known gaps disclosure
+- Historical amendment log (s9–s18) preserved verbatim below CURRENT STATE, retitled `# HISTORICAL AMENDMENT LOG (sessions 9–18)`, marked as non-authoritative
+- Reading-order note at the very top: "read only CURRENT STATE by default"
+
+**2. DECISIONS.md — 3 entries appended:**
+- `2026 s23 — BACKLOG #6b coaching scrub retrofit: DECLINED` with full reopen trigger
+- `2026 s24 — BACKLOG #17 display_subheading cosmetic normalization: DEFERRED` with reopen trigger
+- `2026 s26 — Governance reset` documenting the STATE_OF_PLAY rewrite, demotion of 3 plan docs, update-trigger flight rules, and Step 1.5 permanence
+
+**3. BACKLOG.md — 2 items added:**
+- `#42 — Railway sync backlog (s21–s25 local changes not in production)` — documents what specifically hasn't been pushed (s21 metadata backfill + strip-ON; s24 display.py + YAMLs; s25 validation artifacts). Blocked on #43. Medium priority, HIGH if Dr. Nashat is about to share URL.
+- `#43 — Phase 3.5 ruamel.yaml fix in admin_ui/forms.py` — yaml.safe_dump can corrupt multi-line citation_instructions on YAML save. HIGH if Dr. Nashat is about to touch Railway UI.
+
+**4. NEXT_SESSION_PROMPT_S27.md — governance flight rules installed:**
+- Operating Model #7 NEW: four governance update triggers (CURRENT STATE on closure, DECISIONS on decline/defer, ADR Status on closure, demotion of three plan docs)
+- Step 1 shrunk: default is CURRENT STATE + latest HANDOVER entry only. HANDOVER s9–s25 and the three demoted plan docs are "read on demand only." Estimated context savings: ~30% per session.
+- Step 1.5 tiered: quick-check (~2 min, 4 lines) by default; full 1.5.a–1.5.d audit every 5 sessions OR if quick-check shows drift. Next mandatory full audit: session 31.
+- Anti-goals updated: "check DECISIONS.md before proposing anything that might re-litigate a prior decline"
+- Files NOT to touch: added the 3 demoted plan docs
+- Claude Code 1M section: when to use it (heavy build sessions, 3+ large doc reads) vs stay in Desktop Claude (short tactical, conversations, artifacts). Bootstrap instructions: paste session prompt path as first message.
+
+### Why these controls should hold
+
+- **Step 1.5 quick-check runs every session.** Worst-case drift is caught within one session of starting, not twelve.
+- **Update triggers are in the session prompt flight rules**, which carry forward automatically via the existing "carries forward unchanged" convention. No separate template to maintain.
+- **Three stale plan docs are demoted, not maintained.** Fewer surfaces to drift.
+- **STATE_OF_PLAY's CURRENT STATE section is explicitly canonical** — conflicts resolved in its favor vs older amendment log below. Future rewrites replace CURRENT STATE (keyword-stable), don't amend.
+- **DECISIONS.md as append-only decline log** means "do not re-propose #6b" is structural, not a session-prompt memo that can be lost.
+
+### Files modified
+
+```
+docs/STATE_OF_PLAY.md              prepended ~180 lines (CURRENT STATE section + retitled historical log)
+docs/DECISIONS.md                  appended 10 lines (3 entries)
+docs/BACKLOG.md                    appended 46 lines (#42 + #43)
+```
+
+### Files created
+
+```
+docs/NEXT_SESSION_PROMPT_S27.md    263 lines
+docs/HANDOVER.md                   (this entry)
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes
+- `ingester/*`, `rag_server/*`, `admin_ui/*`, `config/*` — no code scope
+- `docs/ARCHITECTURE.md`, `docs/REPO_MAP.md`, `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` — explicitly demoted, not touched
+- ADR_001–006 — status updates deferred (low leverage per s26 tech-lead rec; C3 control skipped)
+- `docs/plans/*` — no scope
+- `INCIDENTS.md` — no open incidents
+
+### Session 26 spend
+
+~$0.001 total. Step 0 Vertex + OpenAI auth smokes. All governance work is doc writes (free).
+
+### Lessons carried forward to session 27
+
+1. **Operating systems need their own audit gates.** HANDOVER and BACKLOG worked because every session protocol touches them. Plan docs drifted because nothing in the protocol touched them. The fix isn't discipline — it's making the maintenance part of the session flow (update triggers) and adding a cheap audit (Step 1.5 quick-check) that would catch drift the moment it starts.
+
+2. **"Canonical current-state" beats "amendment log" for orientation.** The amendment-log pattern (session N amendment, session N+1 amendment, …) accumulates detail but erodes orientation. A cold-reading session has to read everything to know what's current. A canonical section at the top gives them one authoritative read; everything below is "if you need more depth, here's where it came from."
+
+3. **Demoting is cheaper than maintaining.** REPO_MAP / ARCHITECTURE / COACHING_CHUNK_CURRENT_SCHEMA were three separate surfaces that would each need update triggers to stay current. The combined cost of maintaining them (per session) exceeds the benefit of having three specialized docs vs one canonical STATE_OF_PLAY CURRENT STATE. Archiving them as historical snapshots is a one-time cost; maintaining would have been forever.
+
+4. **Claude Code 1M is the real context answer for heavy build sessions.** Desktop Claude's strength is conversations and scope decisions; Claude Code's 1M window is the right tool for sessions that need to hold governance docs + real work simultaneously. Not either/or — both/and based on session shape.
+
+5. **Approach β (prepend, don't replace) for high-stakes doc rewrites.** The historical amendment log in STATE_OF_PLAY was 600 lines of accumulated narrative. Replacing it would have destroyed reversibility. Prepending a canonical section and retitling the old content as "historical" gave the same forward-looking value with zero destruction. Revisit in a future session if the amendment log genuinely isn't read and can be archived.
+
+### Open items at session 26 close
+
+- BACKLOG #35 (HIGH) — CONTENT_SOURCES.md, still blocking bulk ingestion
+- BACKLOG #36 — April-May 2023 Blogs.docx (gated on #35)
+- BACKLOG #40 — Coaching link-surfacing A/B (~$0.25)
+- BACKLOG #21 — Folder-selection UI redesign
+- BACKLOG #42 NEW — Railway sync backlog (blocked on #43)
+- BACKLOG #43 NEW — ruamel.yaml fix (pre-Dr.-Nashat-sharing)
+- BACKLOG #17 — deferred w/ reopen trigger (captured in DECISIONS)
+- BACKLOG #6b — declined (captured in DECISIONS)
+- BACKLOG #10 — trigger-driven, low priority
+- BACKLOG #26(b) — folds into #21
+- Next v3 handler — gated on #35
+- **Full Step 1.5 audit next due: session 31** (every 5 sessions)
+- STATE_OF_PLAY s19–s25 amendment log — no longer a task; CURRENT STATE section covers orientation
+
+### Chroma state at end of session 26 (UNCHANGED from s25 / s24 / s23 / s22 / s21 close)
+
+- `rf_reference_library`: **605 chunks** (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

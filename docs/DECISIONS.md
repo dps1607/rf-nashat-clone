@@ -32,3 +32,12 @@ Future disambiguation of remaining ambiguous transcript chunks should use Zoom p
 
 ### 2026 — Local Drive credentials via service account
 Service account JSON at `/Users/danielsmith/.config/gcloud/rf-service-account.json` (chmod 600). Project `rf-rag-ingester-493016`. Client email `rf-ingester@rf-rag-ingester-493016.iam.gserviceaccount.com`. Enables local iteration without Railway round-trip. Previously deferred; now resolved.
+
+### 2026 s23 — BACKLOG #6b coaching scrub retrofit: DECLINED
+The coaching collection (9,224 chunks) contains former-collaborator references in raw chunk body text (speaker diarization tokens from pre-scrub ingestion). s15 observed Sonnet 4.6 handles these correctly in responses — absorbs, doesn't echo. Current user-facing surface is acceptable. The retrofit is expensive (read pass + write pass + backup on a 9,224-chunk collection) and solves no observed production problem. **Reopen trigger:** a future model surfaces raw chunk text directly to users, OR a logging/debugging change exposes these tokens in production responses, OR a new export pipeline reads chunk documents verbatim. Until any of those fire, this stays declined.
+
+### 2026 s24 — BACKLOG #17 display_subheading cosmetic normalization: DEFERRED
+The canonical `chunk_to_display()` helper (s24's #18 closure) reads `source_file_name` (v3) or `module_number`+`module_topic` (legacy A4M) for the rendered source label — **not** `display_subheading`. The field is a dead-letter in the current retrieval path. Normalizing it is busywork with no consumer. **Reopen trigger:** a surface appears that reads `display_subheading` (admin UI chunk browser, export to docs, debugging tool) and rendering inconsistency becomes user-visible.
+
+### 2026 s26 — Governance reset: STATE_OF_PLAY as canonical current-state; REPO_MAP/ARCHITECTURE/COACHING_CHUNK_CURRENT_SCHEMA demoted
+s26 Step 1.5 audit found ARCHITECTURE.md, REPO_MAP.md, and COACHING_CHUNK_CURRENT_SCHEMA.md were ~s13-era and 10+ days stale; STATE_OF_PLAY.md stopped at s18; ADR_003 contradicted #29's shipped implementation. Decision: rewrite STATE_OF_PLAY with a canonical CURRENT STATE section at the top; demote the three stale summary docs to historical-snapshot status (do not maintain, read on demand only); install update-trigger flight rules so future closures propagate to STATE_OF_PLAY and DECISIONS in the same commit. HANDOVER and BACKLOG remain the live ledgers. Step 1.5 audit promoted to permanent per-session gate (tiered: quick-check default, full every 5 sessions).

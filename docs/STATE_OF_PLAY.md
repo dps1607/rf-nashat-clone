@@ -1,10 +1,162 @@
-# STATE OF PLAY — corrected current-state document
+# STATE OF PLAY
+
+**Top-of-document rewrite:** 2026-04-16 (session 26, governance reset)
+**Original document:** 2026-04-13 (session 9)
+**Amendment history:** sessions 10, 14/15, 16, 17, 18 appended below; **sessions 19–25 captured only in HANDOVER.md** (see "Known gaps in this document" at the end of the CURRENT STATE section)
+**Reading order:** read only the "CURRENT STATE (as of s26)" section below by default. Everything below that section is historical context — read on demand.
+
+---
+
+# CURRENT STATE (as of session 26, 2026-04-16)
+
+This is the canonical orientation surface for session 27+. If a fact below conflicts with content further down in this document, **this section wins.** The older amendment log is preserved as narrative history; it is not current-state.
+
+## What's live, right now
+
+**Production (Railway):** Two-process stack at `https://console.drnashatlatib.com`, gated by Cloudflare Access, allowlisting Dan and Dr. Nashat. ChromaDB on persistent volume. The stack has been live since 2026-04-09 and is stable. **Production is behind local by sessions s21–s25 worth of changes** (see "Railway sync backlog" below) — no Railway pushes have happened since the s20/s21 window.
+
+**Local (development sandbox):** `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone/` with Chroma at `/Users/danielsmith/Claude - RF 2.0/chroma_db/`. This is where all s16–s25 work has landed. Local leads Railway.
+
+## Data plane (exact as of s26 open)
+
+| Collection | Chunks | Status | Known pollution |
+|---|---|---|---|
+| `rf_reference_library` | **605** | Active, mixed v1/v2/v3 | 584 pre-scrub A4M chunks may contain former-collaborator refs in text (retrofit declined per BACKLOG #6b, s23) |
+| `rf_coaching_transcripts` | 9,224 | Untouched since project start | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
+| `rf_published_content` | not created | Blocked on #35 | — |
+| `rf_library_index` | not created | ADR_002 design, backfill pending | — |
+
+Of the 605 chunks in `rf_reference_library`:
+- **8 v3-metadata-complete** (7 PDF + 1 v2_google_doc, with `extraction_method` / `library_name` / `content_hash` / `source_file_md5` populated — s21 backfill closure)
+- 13 v2 DFH Google Doc chunks (pre-scrub era)
+- 584 pre-scrub A4M chunks (Lineage B — the live reference library in production since day one)
+
+OCR cache: 34 files. Sugar Swaps chunk is strip-ON in production (Canva URL + COVER tag removed, s21 empirically verified).
+
+## Code plane (what's canonical where)
+
+**Ingestion:**
+- v1 loader — frozen
+- v2 loader — frozen except via M3 extract-and-redirect (s17 pattern established)
+- v3 loader — **live. Handles pdf / v2_google_doc / docx.** Next handler (plaintext / sheets / slides / images / av) technically unblocked but gated on #35 content source-of-truth decision
+- Dedup: stage-1 (md5 pre-extraction) + stage-2 (content_hash post-extraction) both live as of s20
+- Scrub: Layer B active in v3 handlers; retrofit on existing collections declined s23 per #6b
+
+**Retrieval + rendering:**
+- `rag_server/display.py` (s24) is the canonical rendering layer. `chunk_to_display(chunk, render_configs) -> dict` + `format_context(chunks, render_configs) -> str`
+- `rag_server/app.py` uses a thin wrapper that delegates to display.py
+- YAML-configurable per agent per collection: `show_source_label`, `show_speaker`, `show_topics`, `show_locator`, `show_link`, `show_date`
+- **Hardcoded-protected (cannot be surfaced via YAML):** `client_rfids`, `client_names`, `call_fksp_id`, `call_file`, coaching date, coaching speaker. Enforced in resolver functions. No knob can flip these
+- `behavior.citation_instructions` field in schema: sales 468 chars (light-touch), coaching 574 chars (clinical transparency). A/B-validated s25, ship-as-is
+
+**Agents:**
+- `nashat_sales` — `rf_reference_library` only, warm/light citation. One active drift marker: sales response trailing emoji (#41, 1/3 occurrences, watch-only)
+- `nashat_coaching` — both collections, clinical-explicit citation. One open quality-polish task: link-surfacing under-indexed (#40, ~$0.25 to validate)
+
+**Admin UI:** Port 5052. Auth via Cloudflare Access in prod, bcrypt locally. File-level selection unlocked s16. Known friction point: #21 (folder-selection redesign, pending-panel/tree redundancy).
+
+## Testing
+
+**Step 0 regression suite: 14 scripts, 209 assertions, all green.** Pure synthetic/pure logic, <$0.001 per run. All run in Step 0 every session:
+
+```
+test_scrub_s13.py                      (19/19)
+test_scrub_wiring_s13.py               (PASS)
+test_types_module.py                   (12/12)
+test_chunk_with_locators.py            (PASS)
+test_format_context_s16.py             (22/22)
+test_admin_save_endpoint_s16.py        (snapshot/restore s22)
+test_google_doc_handler_synthetic.py   (9/9)
+test_scrub_v3_handlers.py              (2/2)
+test_docx_handler_synthetic.py         (12/12)
+test_v3_metadata_writer_s19.py         (4/4)
+test_dedup_synthetic_s19.py            (15/15)
+test_canva_strip_synthetic_s19.py      (15/15)
+test_stage1_dedup_wiring_s20.py        (4/4)
+test_format_context_s24.py             (79/79)
+```
+
+**Live-API one-shots (NOT in Step 0, run on demand):**
+- `test_citation_instructions_ab_live_s25.py` — $0.23/run (8 Sonnet calls)
+- `test_canva_strip_ab_live_s20.py` — $0.0002/run (embedding only)
+- `test_chat_smoke_s17.py` — live Sonnet
+
+**Cost floor for live-API A/B validation: $0.15 per 8-call run** (s25 flight rule — do not estimate below).
+
+## What's next (active priorities)
+
+1. **BACKLOG #35 (HIGH) — `CONTENT_SOURCES.md`.** Blocks bulk ingestion of every text-bearing file type. Needs ~1hr conversation with Dan to assign canonical source per content domain (blogs, lead magnets, coaching, email sequences, educational reference). Until this lands, next v3 handler work can't commit.
+2. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #35)
+3. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
+4. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point)
+5. **BACKLOG #42 NEW s26 — Railway sync backlog** (local is s21–s25 ahead of production)
+6. **BACKLOG #43 NEW s26 — Phase 3.5 ruamel.yaml fix** in `admin_ui/forms.py` before sharing Railway URL with Dr. Nashat
+
+## What's declined (do not re-propose)
+
+These are strategic declines. Reopen only if the documented trigger fires — otherwise every session re-litigates them and burns budget.
+
+| Item | Status | Reopen trigger |
+|---|---|---|
+| **#6b — Coaching scrub retrofit** | Declined s23 | Future model that surfaces raw chunk text directly to users, OR logging change that exposes former-collaborator refs in production responses |
+| **#17 — display_subheading cosmetic normalization** | Deferred s24 | A surface appears that reads `display_subheading` (admin UI chunk browser, export pipeline, debugging tool) and rendering inconsistency becomes user-visible |
+
+See `docs/DECISIONS.md` for the full rationale.
+
+## Railway sync backlog (s21–s25 changes not yet in production)
+
+Local is ahead of Railway by these closures. No single change is large but they compound, and the longer the drift grows, the riskier the eventual atomic sync. Track as BACKLOG #42.
+
+- s21: 8 v3 chunks backfilled with s19 metadata fields; Sugar Swaps strip-ON in production Chroma
+- s24: `rag_server/display.py` canonical renderer + both agent YAMLs (`citation_instructions` + `knowledge.render` blocks)
+- s25: no code changes (A/B validation only) — YAML citations verified ship-as-is
+- Phase 3.5 `ruamel.yaml` fix (BACKLOG #43) must land BEFORE sharing Railway URL with Dr. Nashat — current `yaml.safe_dump` in `admin_ui/forms.py` can corrupt multi-line YAML strings
+
+## Governance model (established s26)
+
+After s9–s25, the operating model is:
+
+1. **HANDOVER.md** — historical ledger, one entry per session at close. Authoritative for "what happened when."
+2. **BACKLOG.md** — numbered open/closed items. Authoritative for "what's next and what's declined."
+3. **STATE_OF_PLAY.md (this document, CURRENT STATE section)** — canonical snapshot. Authoritative for "what exists right now."
+4. **DECISIONS.md** — declines and deferrals with reopen triggers. Authoritative for "don't re-propose X."
+5. **ADR_001–006** — architectural decisions. Historical records with `Status:` fields.
+6. **NEXT_SESSION_PROMPT_S<N>.md** — session bootstrap. Authoritative for flight rules and scope.
+7. **`docs/REPO_MAP.md`, `docs/ARCHITECTURE.md`, `docs/COACHING_CHUNK_CURRENT_SCHEMA.md`** — demoted to historical-snapshot status (s13-era). Not maintained. Read on demand only.
+
+**Update triggers (flight rules, installed s26):**
+- Session closes a BACKLOG item that changes a fact in CURRENT STATE → session updates CURRENT STATE in the same commit
+- Session declines or defers a BACKLOG item with reopen trigger → session appends 3-line entry to DECISIONS.md
+- Session adds a new BACKLOG item → BACKLOG.md updated (already existing rule)
+- HANDOVER entry written at session close (already existing rule)
+
+**Session bootstrap reading order (session 27+):**
+1. Step 0 reality check (data + code sanity, ~10 min)
+2. Step 1: read ONLY (a) CURRENT STATE section of STATE_OF_PLAY (this section), (b) HANDOVER.md most recent entry, (c) BACKLOG.md for items the chosen scope touches
+3. Step 1.5 quick-check (~2 min): plan-docs-last-touched-session probe + ADR status scan. Full audit only if quick-check shows drift, or every 5 sessions
+4. Step 2: scope decision
+
+Older HANDOVER entries and the amendment log below are **read on demand only** when the chosen scope touches that era's work.
+
+## Known gaps in this document (honest disclosure)
+
+- The amendment log below stops at session 18. Sessions 19–25 are captured in HANDOVER.md entries, not here. Next session to rewrite this doc (or a follow-up to s26) can compress s19–s25 HANDOVER entries into a single paragraph at the end of CURRENT STATE if useful.
+- `docs/ARCHITECTURE.md` (Apr 12), `docs/REPO_MAP.md` (Apr 13), `docs/COACHING_CHUNK_CURRENT_SCHEMA.md` (Apr 13) predate every s16+ code change and are not maintained. If you need architecture/file-inventory info, this CURRENT STATE section is authoritative.
+- ADR_003 (Canva dedup) still reads "PROPOSED — design deferred" even though BACKLOG #29 shipped s19 code + s20 A/B verification. Flagged; low-priority cleanup.
+
+## End of CURRENT STATE section
+
+Everything below this line is historical narrative from sessions 9–18. Preserved as source material. Not authoritative for current state.
+
+---
+
+# HISTORICAL AMENDMENT LOG (sessions 9–18)
 
 **Written:** 2026-04-13 (session 9, stabilization session)
 **Amended:** 2026-04-13 (session 10, drive loader pilot — see § "Session 10 amendment" near the bottom)
 **Supersedes orientation in:** `docs/HANDOVER.md` session 7 entry, `docs/NEXT_SESSION_PROMPT.md`, large parts of `docs/REPO_MAP.md` and `docs/ARCHITECTURE.md` that describe local Chroma as primary
 **Earlier handover entries:** preserved as history; do not drive next-session work
-**Status:** Authoritative orientation surface for sessions 10+
+**Status (as of s26):** Historical — see CURRENT STATE section above for authoritative orientation
 
 ---
 
