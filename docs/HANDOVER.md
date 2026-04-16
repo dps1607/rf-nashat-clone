@@ -2904,3 +2904,131 @@ docs/NEXT_SESSION_PROMPT_S25.md             NEW
 - `rf_coaching_transcripts`: 9,224 chunks (untouched)
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files (unchanged)
+
+
+---
+
+## Session 25 — #20 A/B validation shipped — ✅ #20 fully closed (2026-04-16)
+
+**Outcome:** BACKLOG #20 fully closed. Live 8-call A/B validation run; citation_instructions confirmed working as intended on both agents. No YAML changes required. Zero Chroma writes. Spend: $0.2273 (live Sonnet calls).
+
+### Scope decision
+
+Tech-lead recommended Option A (the deferred s24 work). Dan approved. Two design Q's resolved up front:
+- **Q1 (queries):** 4 queries total, 2 per agent — first targets full-metadata retrieval (locator + link), second targets queries that may land on mixed/degraded-metadata chunks. Final set:
+  - S1 (sales): "What should I know about egg quality and age?"
+  - S2 (sales): "Any advice on reducing sugar for fertility?"
+  - C1 (coaching): "How does stress affect fertility outcomes?"
+  - C2 (coaching): "What supplements support ovulation?"
+- **Q2 (temperature):** Left as YAML-configured (0.4 on both agents). Tests the real production path. Ambient drift minimized by running A/B pairs back-to-back on same retrieval.
+
+### Step 0 reality check — all sub-checks PASS, no drift from s24
+
+- Repo at `4ba085b` (s24), working tree clean
+- `rf_reference_library`: 605 (unchanged since s21)
+- v3 chunks: 8 (7 pdf + 1 v2_google_doc), all 4 s19 metadata fields populated
+- Sugar Swaps strip-ON in production: len 3737, no canva.com, no COVER tag
+- OCR cache: 34
+- Drive + Vertex + OpenAI auth: all green
+- All 14 test scripts green (including s24's test_format_context_s24.py 79/79)
+- v3 dry-run byte-identical to s24 baseline
+- Canonical renderer + both YAMLs validate (sales 468 chars + rf_reference_library; coaching 574 chars + both collections)
+- Admin UI on PID 78159; selection_state.json unchanged
+
+### Pre-flight recon before writing script
+
+Before writing the A/B script, verified actual retrieval-ground-truth against Chroma:
+- Egg Health Guide (7 PDF chunks): all have `display_locator` (pp. 1-6, 6-8, 8-10, 10-12, 12-16, 16-18, p. 18) + `source_web_view_link`
+- Sugar Swaps (1 Google Doc chunk): `display_locator='§1'` + `source_web_view_link` on docs.google.com
+- Legacy A4M chunks (non-v3): `module_number` + `module_topic` only; no `display_locator`, no link — this is the degradation-path test case
+
+Confirmed link field in `display.py` is `source_web_view_link` (not `drive_link` or `source_link`). Confirmed both agents use `claude-sonnet-4-6`, temp 0.4, max_tokens 1500.
+
+### What shipped
+
+`scripts/test_citation_instructions_ab_live_s25.py` (322 lines). Replicates the `/chat` pipeline in-process (retrieve → format_context → assemble_system_prompt → Claude) rather than calling the live Flask server, so we can flip `citation_instructions=""` per-call on a deep-copied config without mutating the server singleton.
+
+**Key design choice (justified inline):** Uses `copy.deepcopy(cfg)` to produce a baseline config with citation_instructions blanked. Runs retrieval once per query (identical across A/B — same embedding, same collection state), then renders context once per query, then assembles both prompts, then calls Claude twice. Script pre-flight-verifies that "CITATION GUIDANCE:" header is present in treatment prompt and absent in baseline prompt before firing API calls.
+
+**Reuse:** Imports `assemble_system_prompt` from `rag_server.app` directly — single source of truth, zero drift risk. Importing `rag_server.app` triggers its module-level startup (loads nashat_sales yaml + opens Chroma at import time). Benign — only `assemble_system_prompt` is used downstream; two-second startup cost flagged but left alone.
+
+### Results
+
+All 8 calls succeeded. Runtime ~85s end-to-end. Total tokens: 56,104 in / 3,931 out. Cost: $0.2273 (over the original $0.05 prompt estimate — my fault for quoting low; flagged to Dan before the run as ~$0.15-0.30 range).
+
+| Case | Baseline | Treatment | Key delta |
+|---|---|---|---|
+| S1 (sales, egg quality) | No citations. Generic facts. | "Per the A4M fertility curriculum, at 35..." + "per the Egg Health Guide, pp. 8-10" | Used real locator. Voice warm. |
+| S2 (sales, sugar) | Generic "my favorites." | "A few of my favorites from the Sugar Swap Guide" + "per the A4M curriculum" (alcohol claim) | Source name cited but §1 locator not surfaced. Consistent with light-touch YAML. |
+| C1 (coaching, stress) | Cites 4R Formula only. "Research is clear" w/o source. | "Per the A4M curriculum, elevated glucocorticoids..." | Clinical attribution for the mechanism claim. Coaching agent handled no-locator case without inventing pages. |
+| C2 (coaching, supplements) | Generic recommendations. | "Per the Egg Health Guide (pp. 8-10), blindly loading up on supplements..." | Real page range. Did NOT offer the Drive link (see observation below). |
+
+**Verdict: ship as-is.** Primary intent of #20 (source grounding + no fabrication) is working cleanly. Voice preserved on both agents.
+
+### Observations logged (no action this session)
+
+1. **Link-surfacing is conservative.** 0/4 treatment responses surfaced the Drive link despite 3/4 having at least one linked chunk in retrieved context. The coaching YAML says "offer the Link to the client if they might want to read the full guide" — the model is interpreting the "if" hedge strictly. This is arguably correct for one-shot exchanges (client hasn't asked to read more yet). Only becomes a regression if clients actually request links and don't get them. **No YAML tuning this session.**
+
+2. **S2 emoji drift.** Sales treatment added a trailing `🙂` that baseline did not. Single occurrence across 4 responses. Brand voice doesn't include emoji. Logged as a drift marker — re-evaluate only if it recurs in future A/B passes.
+
+3. **A4M "per the A4M curriculum" is a nice emergent behavior.** Without being told the exact phrasing, both agents converged on the same source-name attribution for legacy A4M chunks (which have no file-level source_name, only `module_number`/`module_topic`). The renderer produces `A4M Module N: topic` and the model paraphrases as "the A4M curriculum." Clean.
+
+### Files shipped
+
+```
+scripts/test_citation_instructions_ab_live_s25.py    NEW, 322 lines
+data/s25_citation_ab_results.json                    NEW, 8 responses dumped for future reference
+docs/BACKLOG.md                                      #20 → ✅ RESOLVED
+docs/HANDOVER.md                                     (this entry)
+docs/NEXT_SESSION_PROMPT_S26.md                      NEW
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` — no writes
+- Both YAMLs — no citation_instructions text changes (verdict was ship-as-is)
+- `rag_server/display.py` — s24 delivery, stable
+- `config/schema.py` — no new fields
+- All ingester/loaders/* — no scope
+- STATE_OF_PLAY.md — HANDOVER captures everything; s19-25 amendment still deferred
+
+### Session 25 spend
+
+$0.2273 actual (live Sonnet A/B) + ~$0.001 Step 0 auth smokes = **~$0.23 total.** Over the $0.05 estimate in the s25 prompt; under the $1.00 interactive gate. Root cause of the miss: underestimated prompt size (5,500-8,000 input tokens per call due to retrieved context) and output length (400-650 tokens). Not a disciplinary miss — flagged to Dan before running.
+
+### The step 0 test suite stays at 14 tests
+
+The new A/B script is **NOT** added to the Step 0 test suite, despite being a "test_*.py" script. Reasoning: it costs $0.23 to run (live Sonnet). Step 0 runs every session; a $0.23 gate on every session is wrong for a validation tool that only needs to run when the YAML citation text changes. The script is retained in `scripts/` for on-demand re-validation.
+
+**s26 Step 0 test count: still 14.** The naming convention `test_*_ab_live_s25.py` carries "ab_live" to signal live-API cost + one-shot intent.
+
+### Lessons carried forward to session 26
+
+1. **Pre-flight recon cheap, avoids script rewrites.** 5 minutes of Chroma metadata inspection before writing the A/B script surfaced that `source_web_view_link` (not `drive_link`) is the canonical field name and that legacy A4M chunks have no link at all. Without this, the script's `_chunk_meta_summary` helper would have printed misleading "L=N" markers.
+
+2. **Emergent behavior observations belong in HANDOVER, not BACKLOG.** The "per the A4M curriculum" behavior is an observation about how the model converges on attribution — not something to track as a task. Similarly the emoji drift. Both are drift markers to watch, not todos.
+
+3. **Cost estimates need a floor, not a ballpark.** The s25 prompt quoted "~$0.05 for Option A" based on assuming ~6,000 total tokens. Actual was 60,000 tokens — 10x off. For any A/B test involving retrieved context + full system prompts on non-trivial chunks, the floor is $0.15, not $0.05. Future session prompts estimating live-API work should assume ~$0.02-0.04 per Sonnet call with retrieved context.
+
+4. **Live-API test scripts aren't regression tests.** Running them every Step 0 would burn budget for no added signal (nothing about prompt text changes session-to-session in the current flight rules). The rule: any test script in the Step 0 suite must be (a) cheap (<$0.001 per run) and (b) stable across sessions. Live A/B scripts fail both. Retained but not in the suite.
+
+### Open items at session 25 close
+
+- BACKLOG #35 (CONTENT_SOURCES.md) — HIGH priority, blocks bulk content ingestion; ~1hr conversation with Dan
+- BACKLOG #36 (April-May 2023 Blogs.docx commit) — gated on #35
+- BACKLOG #21 (folder-selection UI redesign) — biggest UI friction point, 60-90min dedicated session
+- BACKLOG #40 NEW — encourage link-surfacing in coaching (Dan-directed s25; three YAML options documented; ~$0.25 A/B to validate whichever is picked)
+- BACKLOG #41 NEW — emoji drift marker (sales, n=1, watch-don't-fix, promote at n=3)
+- BACKLOG #17 — deferred w/ reopen trigger (no consumer of display_subheading)
+- BACKLOG #6b — declined s23, not to be re-proposed
+- BACKLOG #10 — Low priority, trigger-driven
+- BACKLOG #26(b) (`selectionState` retrofit) — folds into #21
+- Next v3 handler — gated on #35
+- STATE_OF_PLAY s19-25 amendments — still deferred (HANDOVER captures everything)
+
+### Chroma state at end of session 25 (UNCHANGED from s24 / s23 / s22 / s21 close)
+
+- `rf_reference_library`: **605 chunks** (no writes)
+- `rf_coaching_transcripts`: 9,224 chunks (untouched)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files (unchanged)

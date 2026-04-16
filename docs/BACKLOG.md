@@ -683,22 +683,38 @@ and rewrites to natural-sounding prose.
 **Estimated effort:** ~1 hour. Optional polish.
 
 
-### 20. Inline citation prompting in agent system prompts — CODE SHIPPED session 24, A/B DEFERRED to s25
-**Priority:** Closed-pending-A/B.
+### 20. Inline citation prompting in agent system prompts — RESOLVED session 25 — ✅ RESOLVED
+**Priority:** Closed.
 
-**Session 24 work:**
+**Closure (session 25):** Live A/B validation run via `scripts/test_citation_instructions_ab_live_s25.py`. 4 queries (2 sales, 2 coaching) × 2 conditions (baseline with citation_instructions stripped vs. treatment as-shipped) = 8 Sonnet 4.6 calls. Spend: $0.2273. Results dumped to `data/s25_citation_ab_results.json`.
+
+**Verdict: ship as-is.** citation_instructions work as intended; no YAML text changes required.
+
+**Results summary:**
+
+| Criterion | Result |
+|---|---|
+| Source grounding | ✅ Treatment cited sources when they exist. Baseline cited nothing. |
+| Locator honesty | ✅ Cited real locators when present (S1/C2: "Egg Health Guide pp. 8-10"). Did not invent page numbers. |
+| No fabrication | ✅ Every treatment citation traces to a real source name in retrieved context. |
+| Voice preservation | ✅ Sales stayed warm. Coaching stayed warm-but-clinical. |
+| Degradation handling | ✅ A4M chunks with no locator cited as "per the A4M curriculum" — no invented pages. |
+| Link surfacing | ⚠ Observation-only: 0/4 treatment responses surfaced the Drive link despite 3/4 having a linked chunk in context. Model being conservative, which the YAML hedge "if they might want to" arguably permits. Not a bug; captured for future tuning if clients request links. |
+
+**S2 observation (not acted on):** sales treatment added a trailing emoji (`🙂`) that baseline did not. Single occurrence across 4 test responses. Log as a drift marker — re-evaluate if it recurs in future A/B passes.
+
+**Session 24 work (historical, all still in production):**
 - Added `behavior.citation_instructions` field to schema (optional, empty default)
 - `assemble_system_prompt()` appends when non-empty under `CITATION GUIDANCE:` header
 - Sales agent YAML: light-touch guidance ("brief, warm, don't interrupt flow, page/link when shown, never invent")
 - Coaching agent YAML: clinical transparency guidance ("cite explicitly, include page/section when shown, offer Link when available, never invent")
 - Both handle missing metadata gracefully in-prompt: "When only the source name is shown, cite just the name."
 
-**What remains: A/B test (s25, ~$0.05).** Validate effect on Sonnet responses. Representative queries per agent × before/after citation_instructions. Verify:
-- Sales voice doesn't become stilted or over-clinical
-- Coaching responses gain explicit source references without losing warmth
-- Neither agent invents page numbers or links when context lacks them
+**Why the s25 A/B script is NOT added to the Step 0 test suite:** it costs ~$0.23 to run (live Sonnet calls × 8). Step 0 runs every session — a $0.23 gate on every session is not the right pattern. The script is retained in `scripts/` as a one-shot validation tool for future YAML-text changes to citation_instructions; run on demand, not as regression.
 
-**If A/B shows voice regression,** tune the YAML text only — no code changes needed.
+**Files retained:**
+- `scripts/test_citation_instructions_ab_live_s25.py` (322 lines, re-runnable)
+- `data/s25_citation_ab_results.json` (8 responses, token counts, cost per call)
 
 **Original scope (historical):**
 > "When referencing specific facts from the retrieved context, cite the source
@@ -1194,3 +1210,52 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 **Action when resumed:** re-ingest the 8 existing v3 chunks (DFH folder + Sugar Swaps + Egg Health Guide). Upsert behavior overwrites in place — no orphans. Spend: ~$0.001 embeddings.
 
 **Bundle with:** any session that runs a full v3 commit on these files for other reasons (e.g., when Sugar Swaps gets re-ingested with the Canva strip applied).
+
+
+---
+
+## NEW — added session 25
+
+### 40. Encourage (not require) link-surfacing in coaching agent responses
+**Priority:** Low-Medium. Dan-directed s25. Quality polish, not a blocker.
+
+**Background (s25 A/B observation):** The coaching YAML currently says *"When a Link is shown in context, offer it to the client if they might want to read the full guide."* In the s25 live A/B, 0/4 treatment responses surfaced the Drive link even when a linked chunk was in context. C2 specifically had the Egg Health Guide link + pp. 8-10 locator in retrieval and cited the page but not the link. The "if they might want to" hedge is interpreted strictly — model only surfaces links when the client explicitly signals interest in deeper reading.
+
+**Dan's directive:** encourage link-surfacing more in coaching, but don't make it mandatory. The sales agent stays light-touch; this change is coaching-only.
+
+**Three candidate YAML text changes, weakest → strongest:**
+
+1. **Soft nudge.** Replace the current line with: *"When you cite a source that has a Link, include the Link at the end of your citation so the client can explore if useful."* Shift from "only when warranted" to "default include." Lowest risk; still leaves the model room to skip when truly off-topic.
+
+2. **Structural suggestion.** Add an explicit pattern: *"If your response draws from a source with a Link, close with a one-line 'For the full guide: [Link]' note."* More directive; harder for the model to ignore. Risk: may become formulaic across responses.
+
+3. **Display-layer change (not YAML).** Edit `rag_server/display.py` so every chunk with a Link renders `[Full guide: {link}]` inline in the Source line. The model sees it as part of source block formatting, not as a behavioral instruction. Highest reliability, but crosses into `display.py` territory (s24 delivery — currently in the "don't touch unless a BACKLOG item directs" list; THIS item would be that directive).
+
+**Recommendation:** start with Option 1 (soft nudge) — smallest change, YAML-only, reversible in seconds if it degrades voice. Escalate to Option 2 only if A/B shows 1 doesn't move the dial. Option 3 is reserved for "both YAML approaches fail" scenario.
+
+**Required validation:** live A/B re-run (same shape as s25). 4 queries, 2 conditions (current YAML vs Option 1), focus on C1/C2 coaching queries. Verify (a) link-surfacing rate goes from 0/n to >0.5n in C-cases where a link is present, (b) sales voice unchanged (if YAML shared keys shift, unlikely in Option 1), (c) no new drift markers (emoji, tone shift, over-citation). **Estimated cost: ~$0.20-0.30** per the s25 cost-floor rule.
+
+**Anti-scope:** do not modify sales citation_instructions. Do not add new schema fields. Do not touch display.py unless Option 3 is explicitly escalated to.
+
+**When:** any session where Dan has budget for ~$0.25 live A/B and ~1hr of execution. Not HIGH priority vs #35; bundle with another coaching-quality polish if one surfaces.
+
+**Estimated effort:** ~45 min YAML edit + run A/B + diff responses + update BACKLOG entry. Total spend ~$0.25-0.30.
+
+---
+
+### 41. Emoji-in-sales-response drift marker (watch, don't fix)
+**Priority:** Observation only. Log-forward, not a task.
+
+**Background (s25 A/B):** Sales treatment response for S2 ("Any advice on reducing sugar for fertility?") ended with a trailing `🙂` emoji. Baseline response for the same query did not. Single occurrence across 4 treatment responses in the s25 run.
+
+**Why logged:** Reimagined Health brand voice is warm-but-professional (Santorini script, copper/ivory/navy, Dr. Nashat as clinical authority). Trailing emoji isn't catastrophic but it's not the register. Possible cause: citation_instructions YAML's "warm, don't interrupt flow" guidance may inadvertently nudge toward casual markers.
+
+**Drift-marker convention (established s25):** observations that might become problems but haven't yet live in HANDOVER / BACKLOG as markers, not tasks. Threshold for promotion to task: **three independent occurrences** of the same drift pattern across separate runs or real production responses. Until then, just watch.
+
+**When to revisit:** automatically check emoji presence in any future sales-agent A/B or /chat smoke test. If 2+ additional emoji occurrences surface, promote this item to a YAML-tuning task (Option: remove or tighten "warm" language in sales citation_instructions; re-run A/B).
+
+**Current count:** 1 occurrence (s25 S2 treatment).
+
+**Anti-scope:** do not edit YAML pre-emptively on n=1.
+
+**Estimated effort (if promoted):** ~30 min YAML adjustment + A/B re-run on sales queries only, ~$0.15 spend.
