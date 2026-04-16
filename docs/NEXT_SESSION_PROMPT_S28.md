@@ -1,6 +1,18 @@
 # NEXT SESSION PROMPT — session 28
 
-> **Read s27 HANDOVER entry first.** s27 closed #43 as "already resolved, verified" and narrowed #42 to a single chroma content-verification query. The main flight-rule and governance framework from s27 (and s26 before it) carries forward unchanged.
+## Bootstrap reading (do this before anything else)
+
+This prompt is intentionally compact. The "carries forward unchanged" references below resolve to content in the **previous** session's prompt — a cold session must actually read that content, not just acknowledge the phrase.
+
+1. Read this file (`docs/NEXT_SESSION_PROMPT_S28.md`) in full.
+2. Read `docs/NEXT_SESSION_PROMPT_S27.md` sections **"OPERATING MODEL"** and **"ALL FLIGHT RULES"** — these are the enumerated rules this prompt references as "unchanged."
+3. Read `docs/HANDOVER.md` session 27 entry (most recent, at the bottom of the file).
+4. Read the **CURRENT STATE section** of `docs/STATE_OF_PLAY.md` (first ~150 lines only).
+5. Then proceed to Step 0 below.
+
+**This bootstrap pattern carries forward to s29+.** Every future session prompt should open with a similar "Bootstrap reading" block that tells the cold session to read the *prior* session's OPERATING MODEL + ALL FLIGHT RULES sections, not just reference them as "unchanged." The compact "carries forward" convention saves context in the prompt itself but silently breaks bootstrap if the cold session can't see the carried-forward content. When writing the s29 prompt at session close, copy this block and bump the S27/s27 references to S28/s28.
+
+> **tl;dr on s27:** #43 closed as already-resolved (ruamel fix was already in place; verified byte-identical on both agent YAMLs). #42 narrowed to a single Railway chroma content query in s28. Zero writes, zero spend, zero code changes.
 
 ---
 
