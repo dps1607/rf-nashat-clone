@@ -13,7 +13,7 @@ This prompt is compact. The "carries forward unchanged" references below resolve
 
 **This bootstrap pattern carries forward to s30+.** When writing the s30 prompt at session close, copy this block and bump the S28/s28 references to S29/s29.
 
-> **tl;dr on s28:** Four scopes landed in one extended session. **Scope B:** Railway chroma sync (#42 RESOLVED). **Scope A:** `docs/CONTENT_SOURCES.md` shipped (#35 RESOLVED, 489 lines, 14 domains, 13 target collections). **Scope C:** BACKLOG expansion #50-#75 (30 new entries) + #44 migration executed (`rf_published_content` created + 8 chunks migrated). **Scope D:** #56 HTML handler + blog pipeline shipped via WordPress REST API, single-post smoke committed (rf_published_content 8→13), bulk ingestion deferred to #75 per build-vs-go-live discipline. #36 closed as superseded. Total spend $0.000618 across all four scopes.
+> **tl;dr on s28:** Five scopes landed in one extended session. **Scope B:** Railway chroma sync (#42 RESOLVED). **Scope A:** `docs/CONTENT_SOURCES.md` shipped (#35 RESOLVED). **Scope C:** BACKLOG expansion #50-#75 + #44 migration executed. **Scope D:** #56 HTML handler + WordPress blog pipeline shipped, single-post smoke committed. **Scope E:** #57 AC email loader + reusable Haiku classifier shipped, single-email smoke committed (rf_published_content 8→14); GHL deferred to #76 on API capability; #77 diff-incremental + #78 AC bulk opened. Total spend ~$0.006 across all five scopes. Regression suite 15/15 green.
 
 ---
 
@@ -55,7 +55,7 @@ Working tree clean. `origin/main` may or may not match local HEAD depending on w
 
 - `CHROMA_DB_PATH` from `.env` → `/Users/danielsmith/Claude - RF 2.0/chroma_db` (absolute; avoid relative-path foot-gun from s27)
 - rf_reference_library = **597** (external-approved only per s28 tightening)
-- rf_published_content = **13** (8 migrated per #44: 7 Egg Health + 1 Sugar Swaps; 5 blog chunks per #56 single-post smoke: Indoor Air Pollution post 18885)
+- rf_published_content = **14** (8 migrated per #44: 7 Egg Health + 1 Sugar Swaps; 5 blog chunks per #56 smoke: Indoor Air Pollution post 18885; 1 AC email chunk per #57 smoke: msg 3 "[10 Steps Download Inside] Welcome")
 - rf_coaching_transcripts = **9,224** (unchanged; `client_rfids` still flagged for #45 removal)
 - Total: 9,834 chunks across 3 collections
 - v3 chunks = 8, all in rf_published_content
@@ -84,13 +84,27 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ## Step 2 — scope options
 
-### Option A — #57 Email platform export mechanism (MED-HIGH)
-**Scope:** Identify the authoritative email platform (Kajabi most likely; possibly ActiveCampaign or Mailchimp for legacy sequences) and build an export pipeline. Export surface likely HTML (rendered email body) + metadata (sequence name, send date, audience tag). Integrates with `blog_loader.py`'s `extract_plain_text_from_html` helper for body rendering — existing BeautifulSoup utilities from #56 are reusable.
-**Spend:** $0 for handler; ~$0.01-0.05 for smoke ingestion depending on corpus size.
-**Risk:** Medium. Depends heavily on which platform is authoritative and what API/export is available.
-**Effort:** ~2 hr platform discovery + ~3-4 hr handler + test. Single-sequence smoke before bulk.
+### Option A — #45 RFID cleanup (LOW-MED, quick tactical win)
+**Scope:** Strip stale `client_rfids` field from all 9,224 chunks in `rf_coaching_transcripts`. Mirrors #44 migration pattern (pre/post count same, metadata-field edit via Chroma upsert). Classifier-cache-style on-disk audit of what got touched.
+**Spend:** $0. **Effort:** ~30 min.
+**Risk:** Low (metadata-only; chunk count unchanged).
 
-~~Option A (prior) — #56 HTML handler + blog pipeline~~ — **✅ shipped s28-extended.** `ingester/blog_loader.py` (411 lines) + 23 synthetic tests (passing) + single-post smoke (Indoor Air Pollution post, 5 chunks committed). Bulk ingestion deferred to #75 pending consumer (agent retrieval config) or cross-domain dedup design (#68).
+### Option B — #46 per-item review-and-select admin UI (MED-HIGH, unblocks Domains 4c/7a/8a)
+**Scope:** Admin UI workflow for per-item review alongside existing folder-level selection. Needed for FKSP Call Research (85 files), Curated Sales Call List (22 files), the 551 zoom recordings after #48 classifier. Compounds with #21 folder-selection redesign.
+**Spend:** $0. **Effort:** ~3-4 hr scoped vertical slice.
+**Risk:** Low (UI only).
+
+### Option C — #77 diff-based incremental ingestion (cross-loader infra, DESIGN)
+**Scope:** Design doc first. Cursor-state per source, scheduled worker pattern, classifier-filtered auto-ingest. Enables "auto-update on source change" for blog_loader, ac_email_loader, future ig_post_loader, future incremental v3, etc.
+**Spend:** $0 design-only. **Effort:** 2-3 hr doc.
+**Risk:** N/A.
+
+### Option D — #47 multi-modal handler (LARGE, DESIGN)
+**Scope:** Design session for Domain 5b/5c/11a. Option β slide-alignment vs Option α frame-capture + OCR. Critical for RF 2.0 BBT-trends feature.
+**Spend:** $0. **Effort:** 2-3 hr.
+
+~~Option (prior) — #57 Email platform export~~ — **✅ shipped s28-extended scope E.** `ingester/ac_email_loader.py` + `ingester/classify.py` (Haiku-based classifier gate) + single-email smoke. Bulk AC deferred to #78. GHL blocked on platform API capability → #76.
+~~Option (prior) — #56 HTML handler + blog pipeline~~ — **✅ shipped s28-extended scope D.** Bulk deferred to #75.
 
 ### Option B — #45 Remove stale `client_rfids` from `rf_coaching_transcripts` (MED)
 **Scope:** Tactical cleanup. The `client_rfids` field on all 9,224 coaching chunks contains values from an unfinished RFID system. Remove via upsert-with-metadata-minus-field. Add a verification probe showing zero chunks retain the field.
@@ -119,16 +133,19 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ### Tech-lead rec
 
-**A first** (#57 Email platform export — blog loader's HTML extraction helpers reusable; next big file-processing capability). Scope discipline: platform discovery first, then single-sequence smoke, defer bulk until consumer exists (same pattern as #56).
+Four file-processing scopes have now shipped (Railway sync, CONTENT_SOURCES, blog loader, AC email loader + classifier). The next session's leverage depends on what Dan wants to optimize for:
 
-Then based on energy:
-- **B (#45)** as a clean tactical win (RFID field cleanup, ~30 min, $0, mirrors the #44 migration pattern)
-- **D (#49)** — two-tier access decision (Dan's call, strategic conversation, ~15 min if decision only)
-- **F (PersistentClient guard)** — quick safety add-on, ~30 min, $0
+**If the priority is shipping more file-processing capability:**
+- **#46 admin UI per-item review** (MED-HIGH) — unblocks multiple domains at once, mid-size scope
+- **#77 diff-incremental design** (cross-loader) — the auto-update infra Dan flagged in scope E; design-only session
 
-**Alternative first pick — tactical cleanup day:** start with #45 (RFID cleanup) then #49 (two-tier access decision) then F3 (PersistentClient guard). All three together ~1.5 hr and retire three items.
+**If the priority is tactical cleanup / retiring items:**
+- **#45 RFID cleanup** (~30 min, $0) + **F3 PersistentClient guard** (~30 min, $0) + **#49 two-tier access decision** (~15 min conversation) — cleanup day, ~1.5 hr, retires 3 items
 
-If #57 email platform discovery surfaces blockers (no API access, export format unclear, etc.), pivot to **E (#47 multi-modal handler design doc)** — that's the next biggest file-processing capability in the backlog, and a design session is $0 value.
+**If the priority is de-risking the biggest future scope:**
+- **#47 multi-modal handler design doc** (2-3 hr, $0) — foundation for Domain 5b/5c/11a; the single biggest downstream scope
+
+My default recommendation: **cleanup day (#45 + #49 + F3)** — retires 3 items with low cognitive load, preserves runway for a big scope in s30.
 
 ---
 
@@ -154,4 +171,13 @@ If #57 email platform discovery surfaces blockers (no API access, export format 
 
 ## End of session 29 prompt
 
-s28 shipped **four scopes** in a single extended session: Railway sync (#42), CONTENT_SOURCES.md (#35), #44 migration, and #56 HTML handler + blog pipeline (code + single-post smoke). Session 29's biggest leverage options: **#57 Email platform export** (biggest remaining file-processing capability, reuses #56 helpers), **#45 RFID cleanup** (quick tactical win), or a **governance cleanup day** (#45 + #49 + F3 together). Good luck.
+s28 shipped **five scopes** in a single extended session: Railway sync (#42), CONTENT_SOURCES.md (#35), #44 collection migration, #56 WordPress blog pipeline + #57 AC email loader with reusable Haiku classifier. 15-script regression suite green throughout.
+
+**s28-extended architectural deliverables that future loaders reuse:**
+- `ingester/classify.py` — Haiku-based marketing-vs-operational binary classifier with content-hash cache (call `is_operational(subject, body)` from any ingester's fetch loop)
+- `ingester/blog_loader.extract_plain_text_from_html` — shared HTML-to-plaintext helper used by blog + AC loader
+- Chunk-ID namespaces: `wp:`, `drive:`, `email-ac:` — disambiguates provenance
+
+**Flight rule carried forward:** `load_dotenv(override=True)` required for any script reading secrets from `.env` — the user's shell exports empty strings that silently win over `.env` values under default `load_dotenv()`.
+
+Session 29's cheapest total-value pick: **cleanup day** (#45 + #49 + F3). Bigger pick: #46 admin UI or #77 diff-incremental design. Good luck.

@@ -1489,10 +1489,53 @@ Bulk run tracked as **#75** — fires when a consumer exists or content-quality/
 
 **Unblocks:** Domain 1 canonical ingestion now has working pipeline. Domain 3 Email sequences can reuse the BeautifulSoup extraction helper. #36 (April-May 2023 Blogs.docx) resolved by this scope — canonical is HTML via this pipeline, not docx; #36 closed as superseded.
 
-### 57. Email platform export mechanism
-**Priority:** MEDIUM-HIGH. Gate for Domain 3 (email sequences).
-**Scope:** Identify authoritative email platform (Kajabi vs ActiveCampaign vs Mailchimp), then build an export pipeline. Export surface likely HTML (rendered email body) + metadata (sequence name, send date, audience tag). Integrates with HTML handler (#56).
-**Effort:** ~1 day discovery + build; depends heavily on which platform is authoritative and what API/export is available.
+### 57. Email platform export mechanism — ✅ RESOLVED session 28-extended (code+smoke; AC only; GHL + AC bulk deferred)
+**Priority:** Closed (AC code + smoke). See #76 (GHL deferred) and #78 (AC bulk deferred).
+
+**Closure (s28-extended, 2026-04-17):**
+
+Dan confirmed authoritative email platforms are **ActiveCampaign (older)** + **GoHighLevel (newer, migrating to)**. Built ActiveCampaign ingestion pipeline this session; GHL is blocked on API capability and deferred to #76.
+
+**Architectural decisions:**
+
+- **Classifier-gated ingestion as core infra (not email-specific).** Per Dan s28: "per our design we will update the RAG from time to time and the diff will be added. all emails, like new ig posts, and blogs, etc. will need to be put in. So we want this automated, meaning we should use a cheap llm to classify and choose." Built `ingester/classify.py` — small Haiku-4.5-based binary classifier (MARKETING vs OPERATIONAL vs UNCLEAR). Cached by content-hash to `data/classifier_cache.jsonl` — same content → same verdict → $0 on re-runs. Reusable for future loaders (IG, incremental blog, Zoom recordings via #48, etc.).
+
+- **Parallel ingester pattern** — `ingester/ac_email_loader.py` (411 lines) mirrors `blog_loader.py`. Different source (AC REST v3 `/api/3/messages`), same sink (`rf_published_content`). Reuses v3 embedding + chunk_with_locators (scrub Layer B automatic) + stage-2 content_hash dedup + shared HTML-to-text helper from blog_loader.
+
+- **Chunk ID namespace:** `email-ac:<account>:<message_id>:<chunk_index:04d>` (disambiguates from `wp:` and `drive:`).
+
+- **Date floor:** `cdate >= 2022-01-01` applied server-side via AC filter so pagination skips pre-2022 content.
+
+**Classifier calibration (`scripts/test_classify_live_s28.py`):** 8/8 known samples classified correctly. 4 marketing (Vitamin D blog, welcome kickstart series, sugar-fertility, hormone reset guide) all → MARKETING. 4 operational (unsubscribe confirmation, FKSP kickoff reminder, payment received, password reset) all → OPERATIONAL. Total classifier cost across 8 samples: $0.002661.
+
+**Dry-run against live AC (--limit 10):**
+- 1,226 messages in AC since 2022
+- Sample: 10 fetched → 3 marketing kept, 7 operational skipped, 0 empty
+- Classifier calls correctly flagged stock-template AC emails ("Your unsubscription confirmation", "Update your subscription to %LISTNAME%") as operational, and a "Welcome to 5DC" email that was pure logistics + ToC (no teaching content).
+
+**Single-email --commit (msg=3 "[10 Steps Download Inside] Welcome"):**
+- rf_published_content: 13 → 14 chunks (1 new AC chunk)
+- Fresh-client probe confirms metadata: `source_pipeline=ac_email_loader`, `v3_category=ac_email`, `ac_message_id=3`, `ac_from_name=Nashat Latib`, `display_source=[10 Steps Download Inside] Welcome`, `content_hash` present, `library_name=rf_published_content`
+- Query sanity: "welcome 10 steps download" → AC chunk top hit (distance 0.7036)
+- Non-regression: blog query ("indoor air pollution") still top at 0.2339; lead magnet query ("sugar alternatives") still top at 0.3692 (both unchanged)
+- Full regression suite: 15/15 test scripts passing
+
+**Protocol diagnosis caught in this scope:** `load_dotenv()` default behavior doesn't override shell-exported env vars. The user's shell exports `ANTHROPIC_API_KEY=""` (empty), which masked the valid `.env` value. **Fix applied:** `load_dotenv(override=True)` in `ingester/classify.py`. All future scripts that read from `.env` should use `override=True` to avoid this trap. Existing `scripts/test_citation_instructions_ab_live_s25.py` may have a latent version of this bug (uses default `load_dotenv()`) — would only bite on re-run; flagged but not urgent.
+
+**Files shipped:**
+- `ingester/classify.py` — NEW, ~180 lines. `is_operational(subject, body_preview) → bool` + caching.
+- `ingester/ac_email_loader.py` — NEW, ~411 lines. Parallel ingester with classifier integration.
+- `scripts/test_classify_live_s28.py` — NEW live-API calibration test (not in regression suite per s25 rule).
+- `data/classifier_cache.jsonl` — classifier verdict cache (appends on every new classification).
+- `data/ingest_runs/39bd0316f8fb42ae.dry_run.json` — 10-message dry-run record with per-message verdicts.
+- `data/ingest_runs/50f08362bd4d4ad0.json` — single-email commit record.
+
+**Spend:** $0.002661 classifier calibration + $0.002329 dry-run 10 classifications + $0.000094 embedding for single-email smoke ≈ **$0.005 total this scope**.
+
+**Deferrals:**
+- **AC bulk ingestion** (remaining ~1,225 messages since 2022) → #78. Fires when a consumer exists (agent YAML updated to retrieve from `rf_published_content`) OR cross-domain dedup with blogs (#68) is designed. Projected bulk cost: ~$0.35 total (classifier $0.29 + embeddings $0.05).
+- **GHL email ingestion** → #76. Blocked on GHL V2 API capability (no detail endpoint for email bodies).
+- **Diff-based incremental ingestion** (the "auto-update on source change" Dan asked about) → #77. Loader-agnostic: per-source cursor state, periodic worker, classifier-filtered.
 
 ### 58. IG DMs export mechanism
 **Priority:** MEDIUM. Gate for Domain 4c (sales playbook) + partial Domain 14.
@@ -1593,3 +1636,34 @@ Bulk run tracked as **#75** — fires when a consumer exists or content-quality/
 **Rollback:** `collection.delete(where={"source_pipeline": "blog_loader"})` via Chroma client — trivial undo.
 **Effort:** ~90 seconds wall clock for the commit + verification probe.
 **Anti-scope:** do not expand beyond bulk blog commit. Schema evolution, author bio enrichment, featured-image OCR, etc., are separate scopes.
+
+### 76. GHL email ingestion (blocked on V2 API capability)
+**Priority:** LOW (blocked). Opened s28-extended post-#57.
+**Scope:** GoHighLevel is the platform newer email content is migrating to. Discovery in s28-extended found:
+- GHL V2 API (`services.leadconnectorhq.com`) exposes **list endpoints** for workflows (62 found), emails/builder templates (2), campaigns (0 used). Auth scopes broadened to workflow.readonly + emails.readonly + campaigns.readonly + locations.readonly — all list endpoints return 200.
+- **But no DETAIL endpoints** that return the email HTML body. `GET /workflows/{id}` → 404. `GET /emails/builder/{id}` → 404. `GET /emails/campaigns` → 401 "This route is not yet supported by the IAM Service." These are known GHL API gaps, not scope issues.
+- Conversations endpoint returns 44,955 per-contact threads (mostly SMS/IG); pulling email bodies that way is delivery-event-level, not source-authoring.
+**Resolution:** wait for GHL to expose detail endpoints (they're actively developing V2), or explore a manual export path (UI → CSV/HTML), or scrape with browser automation (fragile, TOS risk).
+**Unblocks:** Domain 3 newer-era email coverage. AC covers legacy corpus.
+
+### 77. Diff-based incremental ingestion (cross-loader infra)
+**Priority:** MEDIUM-HIGH. Opened s28-extended.
+**Scope:** Per Dan s28: "per our design we will update the RAG from time to time and the diff will be added. all emails, like new ig posts, and blogs, etc. will need to be put in. So we want this automated." Build a cross-loader incremental-sync pattern:
+- Per-source cursor state in `data/ingestion_cursors.json` (e.g. `last_message_cdate` for AC, `last_modified` for WP blog posts, `last_media_id` for IG)
+- Each loader gains an `--incremental` mode that reads its cursor, pulls items newer than cursor, classifies + filters + commits, updates cursor on success
+- Classifier (already built, #57) runs on every new item; operational ones skipped automatically
+- Optional scheduled runner (Railway scheduled job, or local cron): fire each loader daily/weekly
+
+**Effort:** ~1 day to add incremental mode to existing blog_loader + ac_email_loader + cursor state; ~1-2 more days for a scheduled runner. Split into phase 1 (incremental mode per loader, manual trigger) and phase 2 (scheduled automation).
+**Depends on:** #57 (done) for classifier infra. Fires when a consumer exists (agent YAML retrieving from rf_published_content).
+
+### 78. Bulk AC email ingestion (deferred from #57)
+**Priority:** LOW (defer per build-discipline). Opened s28-extended.
+**Scope:** Run `./venv/bin/python -m ingester.ac_email_loader --library rf_published_content --commit` against the full AC corpus (~1,225 remaining messages since 2022; 1 already committed as smoke). Expected breakdown from sample: ~30% marketing kept (~370 messages), ~70% operational skipped.
+**Fires when:**
+- An agent YAML is updated to retrieve from `rf_published_content` (consumer exists), OR
+- Cross-domain dedup with blogs (#68) is designed, OR
+- Explicit validation pass over a larger sample confirms classifier accuracy holds beyond the 10-message sample
+**Projected spend:** ~$0.29 classifier + ~$0.05 embeddings = **~$0.35 total**. Well under $1 gate.
+**Rollback:** `collection.delete(where={"source_pipeline": "ac_email_loader"})`.
+**Anti-scope:** do not expand to schema changes, metadata enrichment, or cross-platform dedup during bulk run — those are separate scopes.

@@ -3692,3 +3692,147 @@ $0.000618 total (one single-post blog embedding). Every dry-run and regression p
 - OCR cache: 34 files (unchanged)
 
 **Railway:** diverged by 13 chunks now. No agent retrieves from rf_published_content, so production behavior unaffected. Tracked as #74.
+
+---
+
+## Session 28 (extended, cont.) — BACKLOG #57 RESOLVED (AC code+smoke+classifier); #76/#77/#78 opened (scope E, 2026-04-17)
+
+**Outcome:** Built the second non-Drive ingestion pipeline — ActiveCampaign email loader — plus a **reusable Haiku-based content classifier** as ingestion infrastructure. Classifier-gated single-email smoke commit landed (rf_published_content 13 → 14). GHL email ingestion blocked on platform API capability (opened #76). AC bulk ingestion deferred per build-discipline (#78). Diff-based incremental auto-ingestion opened as cross-loader infra (#77). Total scope spend: $0.005 across calibration + dry-runs + smoke. Regression suite 15/15 green.
+
+### Scope unfolding
+
+Dan chose Option 1 (#57 Email platform) from s28-extended scope-D close. Clarified: email platforms are AC (older) + GHL (newer), not Kajabi. GHL credentials already set up; AC pending.
+
+**GHL-first discovery revealed a platform limitation.** V1 API returned `"Unauthorized, Switch to the new API token"` (token was V2). V2 probe with broadened scopes: list endpoints work (62 workflows, 2 email templates, 0 campaigns used, 44,955 conversations), but **no detail endpoints expose email HTML bodies**. `GET /workflows/{id}` → 404, `GET /emails/builder/{id}` → 404, `GET /emails/campaigns` → 401 "This route is not yet supported by the IAM Service." These are known GHL API gaps, not scope issues. Deferred as #76.
+
+**Pivoted to AC (dan provided credentials).** AC V3 API has clean shape: `/messages` list + `/messages/{id}` detail returns the HTML body. 1,226 messages in corpus since 2022 cdate floor.
+
+### Classifier architecture decision
+
+Dan asked for smart filtering to prevent operational/transactional emails ("your FKSP kickoff call is tomorrow", unsubscribe confirmations, receipts) from polluting retrieval. After initial over-scoping (a full classifier module with review queues and versioning), Dan course-corrected: "I am simply saying per our design we will update the RAG from time to time and the diff will be added. all emails, like new ig posts, and blogs, etc. will need to be put in. So we want this automated, meaning we should use a cheap llm to classify and choose. That is all I meant."
+
+Rebuilt with the right scope:
+
+- **`ingester/classify.py` (~180 lines)** — single function `is_operational(subject, body_preview) -> bool`. Haiku 4.5 one-word response (MARKETING / OPERATIONAL / UNCLEAR). Cache-keyed by content hash at `data/classifier_cache.jsonl` → same content → same verdict → $0 on re-runs. Fail-safe: on error or missing API key, returns False (lets content through; recoverable by re-run after fix). Per-call cost ~$0.00033.
+
+- **Reusable across loaders.** Same function called by `ac_email_loader.py` now; will be called by future `ig_post_loader.py`, future incremental `blog_loader.py`, #48 zoom classifier, etc. No loader-specific classifier modules needed.
+
+### Key environmental diagnosis — carried forward as a flight rule
+
+`load_dotenv()` default behavior **does not override** existing shell-environment values. Dan's shell exports `ANTHROPIC_API_KEY=""` (empty string), which Python's `os.environ` inherits at process start. Default `load_dotenv()` respects the empty value and refuses to overwrite with the real value from `.env`.
+
+**Fix:** `load_dotenv(override=True)`. Applied in `ingester/classify.py`.
+
+**Latent bug flagged:** `scripts/test_citation_instructions_ab_live_s25.py` uses default `load_dotenv()` and `os.environ.get("ANTHROPIC_API_KEY", "")` — would fail the same way if re-run in this shell environment. Not urgent (script is already s25 history) but flagged.
+
+**New flight rule for s29+:** all scripts that read secrets from `.env` should use `load_dotenv(override=True)`. Add to test stubs / new loader templates.
+
+### AC loader build (TDD)
+
+Wrote `scripts/test_classify_live_s28.py` — 8 calibration cases (4 known marketing, 4 known operational). All 8 passed on first run. $0.00266 calibration cost. Cache populated; re-runs $0.
+
+Built `ingester/ac_email_loader.py` (~411 lines) — parallel ingester mirroring `blog_loader.py`:
+
+- AC REST client with `/api/3/messages` list + `/api/3/messages/{id}` detail. Pagination via `offset` + `limit`. Date floor `filters[cdate_gt]=2022-01-01` applied server-side.
+- Per-message flow: fetch detail → extract plain text via `blog_loader.extract_plain_text_from_html` (reused helper) → classify via `ingester.classify.is_operational` → skip if operational, chunk + scrub + hash if keep.
+- Stage-2 content_hash dedup against `rf_published_content` via existing `_check_dedup` (shared with v3 and blog_loader).
+- Chunk-ID namespace: `email-ac:<account_host>:<message_id>:<chunk_index:04d>` (disambiguates from `wp:` and `drive:`).
+- Redaction wrapper around all error/log output — `_SECRETS` list catches AC_API_URL, AC_API_KEY, and account subdomain before any string hits stdout. Same defense-in-depth pattern learned from the s28-extended GHL location-ID leak incident.
+- Writes run record (dry-run or commit variant) + appends to `data/audit.jsonl` on commit.
+
+### Dry-run + smoke commit
+
+**--limit 10 dry-run against live AC:**
+- 1,226 messages available since 2022
+- 10 fetched → 3 kept (marketing), 7 skipped (operational — 6 unsubscribe/list-update templates, 1 "Welcome to 5DC" logistics/ToC)
+- Classifier cost: $0.00233 (cached after first run)
+- Eyeballed verdicts against msg 8 body — "Welcome to 5DC" was pure logistics + table of contents + `%FIRSTNAME%` template placeholder — classifier's operational call was correct.
+
+**--limit 5 --commit** (hit boundary condition: `--limit` applies to messages fetched, not kept; --limit 1 stopped at the first operational msg=1 before reaching any kept):
+- Kept and committed msg=3 "[10 Steps Download Inside] Welcome" (Dr. Nashat's 10-Steps lead magnet delivery, 2895 plain chars, 1 chunk, 495 words)
+- rf_published_content: 13 → 14 chunks
+- Fresh-client probe: chunk id `email-ac:reimaginedhealth:3:0000`, metadata complete (ac_message_id, ac_subject, ac_from_name, ac_from_email, cdate, v3_category=ac_email, content_hash, library_name, word_count, display_source), body preview shows real marketing content ("Hi %FIRSTNAME%, I'm so glad you found me! My name is Dr. Nashat Latib...").
+- Query sanity: "welcome 10 steps download" → AC chunk top hit (distance 0.7036).
+- Non-regression: blog query ("indoor air pollution") top at 0.2339 (unchanged); lead-magnet query ("sugar alternatives") top at 0.3692 (unchanged). Zero regression.
+- Full regression suite: **15/15 passing**.
+
+### Bulk ingestion deferred per build-discipline
+
+Projected AC bulk cost:
+- If the 70% operational / 30% kept ratio holds: 1,226 × $0.00033 classifier + ~370 kept × ~1.5 chunks × ~500 tokens × $0.13/M ≈ **~$0.43 bulk** (well under $1 interactive gate)
+
+Reasons for deferring:
+1. No agent consumes `rf_published_content` yet (same as #56 blog deferral logic)
+2. Cross-domain dedup with blog content not designed (#68) — blog-then-email republishing is common
+3. Classifier calibration at n=10 is good signal but 1,226 is the real test; ambiguous verdicts should queue for review before bulk
+4. Single-email smoke proves pipeline works end-to-end
+
+Tracked as **#78**. Fires when agent retrieval wiring, cross-domain dedup design, or explicit Dan decision to just ship.
+
+### Files shipped (scope E)
+
+```
+ingester/classify.py                             NEW, ~180 lines (Haiku classifier + cache)
+ingester/ac_email_loader.py                      NEW, ~411 lines (AC ingester with classifier gate)
+scripts/test_classify_live_s28.py                NEW (8 calibration cases, live Haiku)
+data/classifier_cache.jsonl                      NEW (append-only verdict cache)
+data/ingest_runs/39bd0316f8fb42ae.dry_run.json   10-message dry-run
+data/ingest_runs/246867b100c44f8d.json           --limit 1 boundary-bug commit (no writes)
+data/ingest_runs/50f08362bd4d4ad0.json           --limit 5 --commit (1 chunk written)
+data/audit.jsonl                                 appended commit entry
+docs/BACKLOG.md                                  #57 RESOLVED, #76/#77/#78 opened
+docs/STATE_OF_PLAY.md                            rf_published_content 13→14; ingestion section adds ac_email_loader
+docs/HANDOVER.md                                 this scope-E section
+```
+
+### Files NOT touched (intentional)
+
+- Drive loaders (v1/v2/v3) — ac_email_loader is parallel, not a modification
+- rag_server/display.py — no scope
+- config/nashat_*.yaml — out of scope (agent retrieval config is a separate item)
+- blog_loader.py — stays working as-is; classifier integration into blog_loader is a separate scope if ever needed (blog content is almost never "operational")
+
+### Session 28 extended scope E spend
+
+$0.005 total:
+- Classifier calibration: $0.00266
+- Dry-run --limit 10 classifications: $0.00233
+- Single-email smoke embedding: $0.00009
+
+Session 28 grand total (B + A + C + D + E): **~$0.006**.
+
+### Lessons carried forward to s29
+
+1. **Classifier-as-infrastructure is the right architectural default for any diff-based ingestion.** Single reusable function `is_operational(subject, body) -> bool`, cached, fail-safe. Call it in every loader's fetch loop before chunking. Generalizes to IG posts, Zoom recordings (#48), future channels without new per-loader classifier code.
+
+2. **`load_dotenv(override=True)` is non-negotiable** for any script reading secrets from `.env`. Shell-exported empty strings silently win over `.env` values with default behavior. The 30-minute debug was worth the flight-rule upgrade.
+
+3. **Platform API capability gaps are real research findings, not failures.** GHL V2's missing email-body detail endpoints are a known limitation we discovered, documented (#76), and deferred. AC V3's clean shape made this scope ship. Multi-platform work should always start with per-platform API capability probes before committing to build.
+
+4. **Defense-in-depth redaction wraps every loader with external API calls.** AC loader picks up the lesson from the s28-extended GHL location-ID leak: sanitization lives at the print boundary, not at the URL-construction boundary. Every script that calls external APIs with secrets goes through `_SECRETS` replacement before stdout.
+
+5. **`--limit` semantics matter.** `--limit N` currently limits messages fetched, not messages kept. With a high-skip-rate classifier, `--limit 1` can yield zero commits. Either document clearly or split into `--fetch-limit` + `--keep-limit`. Not urgent (operator can bump `--limit`); flagged for future UX polish.
+
+### Open items at s28-extended scope-E close
+
+- **AC bulk ingestion (#78)** — ~$0.43 projected, fires when consumer exists
+- **GHL email ingestion (#76)** — blocked on GHL V2 API capability, revisit in 3-6 months
+- **Diff-based incremental ingestion (#77)** — cross-loader infra, design session needed
+- **#45 RFID cleanup** — cheapest remaining tactical (~30 min, $0)
+- **#46 per-item admin UI** — biggest multiplier across 4c/7a/8a
+- **#49 two-tier access decision** — pending Dan
+- **Full Step 1.5 audit next due: s31** (s26 was last)
+
+### Chroma state at end of session 28-extended scope E
+
+**Local (+1 AC chunk from scope D close):**
+- `rf_reference_library`: 597 chunks
+- `rf_published_content`: **14 chunks** (8 migrated + 5 blog smoke + 1 AC email smoke)
+- `rf_coaching_transcripts`: 9,224 chunks
+- Total: 9,835 chunks across 3 collections
+- v3 chunks: 8 (all in rf_published_content)
+- blog_loader chunks: 5 (all in rf_published_content, `source_pipeline=blog_loader`)
+- ac_email_loader chunks: 1 (in rf_published_content, `source_pipeline=ac_email_loader`)
+- OCR cache: 34 files (unchanged)
+
+**Railway:** diverged by 14 chunks now (no agent consumes rf_published_content, production unaffected). Tracked as #74.

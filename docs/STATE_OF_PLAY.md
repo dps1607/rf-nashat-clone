@@ -23,7 +23,7 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 |---|---|---|---|
 | `rf_reference_library` | **597** | Active, external-approved only — **#44 migration complete s28-extended (605→597, 8 v3 chunks moved out)** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
 | `rf_coaching_transcripts` | 9,224 | Active — **`client_rfids` field flagged stale s28 for removal per #45** | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
-| `rf_published_content` | **13** | **Active** — 8 migrated s28-extended (#44, Egg Health + Sugar Swaps) + 5 blog chunks from Indoor Air Pollution post (#56 single-post smoke). Bulk blog ingestion (80 remaining posts, 272 chunks) deferred to #75 | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
+| `rf_published_content` | **14** | **Active** — 8 migrated s28-extended (#44) + 5 blog chunks (#56 smoke) + **1 AC email chunk (#57 smoke)**. Bulk blog ingestion deferred to #75; bulk AC email deferred to #78; GHL email blocked on API capability (#76) | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
 | `rf_curriculum_paywalled` | not created | **Proposed s28** — target for behind-paywall course material (FKSP, TFF, RH Detox, etc.) | — |
 | `rf_sales_playbook` | not created | **Proposed s28** — target for IG DMs + sales call transcripts (high-close + comparative) | — |
 | `rf_marketing` | not created | **Proposed s28** — masterclasses, Meet & Greet, Funnels copy | — |
@@ -50,9 +50,11 @@ OCR cache: 34 files. Sugar Swaps chunk is strip-ON in production (Canva URL + CO
 - v1 loader — frozen
 - v2 loader — frozen except via M3 extract-and-redirect (s17 pattern established)
 - v3 loader — **live. Handles pdf / v2_google_doc / docx.** Drive-sourced only.
-- **blog_loader — NEW s28-extended.** WordPress REST API ingester (parallel to v3). `wp_rest` extraction method, writes to `rf_published_content`. Reuses v3 embedding + chunking + scrub + dedup helpers. Single-post smoke committed; bulk deferred per #75.
-- Dedup: stage-1 (md5 pre-extraction) + stage-2 (content_hash post-extraction) both live as of s20; blog_loader uses stage-2 (HTML md5 serves as stable stage-1 input)
-- Scrub: Layer B active in v3 handlers + blog_loader; retrofit on existing collections declined s23 per #6b
+- **blog_loader — live s28-extended.** WordPress REST API → `rf_published_content`. Single-post smoke committed; bulk deferred per #75.
+- **ac_email_loader — NEW s28-extended.** ActiveCampaign REST v3 API → `rf_published_content`. Single-email smoke committed; bulk deferred per #78. Filters by `cdate >= 2022-01-01`. **Classifier-gated** — every message passes through `ingester/classify.py` Haiku filter; operational/transactional content auto-skipped.
+- **classifier (ingester/classify.py) — NEW s28-extended.** Cross-loader infra. Haiku-4.5 binary MARKETING/OPERATIONAL/UNCLEAR classifier. Cached by content-hash at `data/classifier_cache.jsonl`; same content → same verdict → $0 on re-run. Reusable for future loaders (IG posts, incremental blog, Zoom recordings via #48, etc.).
+- Dedup: stage-1 (md5 pre-extraction) + stage-2 (content_hash post-extraction) both live as of s20; all non-Drive loaders use stage-2 (content md5 serves as stable stage-1 input)
+- Scrub: Layer B active in v3 handlers + blog_loader + ac_email_loader; retrofit on existing collections declined s23 per #6b
 
 **Retrieval + rendering:**
 - `rag_server/display.py` (s24) is the canonical rendering layer. `chunk_to_display(chunk, render_configs) -> dict` + `format_context(chunks, render_configs) -> str`
