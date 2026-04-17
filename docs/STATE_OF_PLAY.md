@@ -21,10 +21,21 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 
 | Collection | Chunks | Status | Known pollution |
 |---|---|---|---|
-| `rf_reference_library` | **605** | Active, mixed v1/v2/v3 | 584 pre-scrub A4M chunks may contain former-collaborator refs in text (retrofit declined per BACKLOG #6b, s23) |
-| `rf_coaching_transcripts` | 9,224 | Untouched since project start | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
-| `rf_published_content` | not created | Blocked on #35 | — |
+| `rf_reference_library` | **605** | Active, mixed v1/v2/v3 — **tightened s28 to external-approved only; 8 v3 chunks misplaced, migration tracked as #44** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
+| `rf_coaching_transcripts` | 9,224 | Active — **`client_rfids` field flagged stale s28 for removal per #45** | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
+| `rf_published_content` | not created | **Proposed s28** — target for our public-facing educational (blogs, lead magnets, email); creation tracked as #44 | — |
+| `rf_curriculum_paywalled` | not created | **Proposed s28** — target for behind-paywall course material (FKSP, TFF, RH Detox, etc.) | — |
+| `rf_sales_playbook` | not created | **Proposed s28** — target for IG DMs + sales call transcripts (high-close + comparative) | — |
+| `rf_marketing` | not created | **Proposed s28** — masterclasses, Meet & Greet, Funnels copy | — |
+| `rf_testimonials` | not created | **Proposed s28** — multi-modal testimonial assets | — |
+| `rf_visual_library` | not created | **Proposed s28** — IG posts + Canva polished visuals | — |
+| `rf_lab_data` | not created | **Proposed s28** — client lab results (Biocanic + client-uploaded + Biocanic tutorials) | — |
+| `rf_supplements` | not created | **Proposed s28** — future Shopify supplements app data | — |
+| `rf_coaching_visuals` | not created | **Proposed s28** — BBT/MSQ/labs extracted from coaching-call videos | — |
+| `rf_internal_knowledge` | not created | **Proposed s28 (conditional on #49)** — content-creation-tier-only collection | — |
 | `rf_library_index` | not created | ADR_002 design, backfill pending | — |
+
+**Collections architecture note (s28):** the above 13-collection map reflects the `docs/CONTENT_SOURCES.md` decisions. All 11 "not created" collections are design-phase only — actual creation happens per-ingestion-commit and may consolidate or split based on empirical retrieval behavior.
 
 Of the 605 chunks in `rf_reference_library`:
 - **8 v3-metadata-complete** (7 PDF + 1 v2_google_doc, with `extraction_method` / `library_name` / `content_hash` / `source_file_md5` populated — s21 backfill closure)
@@ -85,12 +96,20 @@ test_format_context_s24.py             (79/79)
 
 ## What's next (active priorities)
 
-1. **BACKLOG #35 (HIGH) — `CONTENT_SOURCES.md`.** Blocks bulk ingestion of every text-bearing file type. Needs ~1hr conversation with Dan to assign canonical source per content domain (blogs, lead magnets, coaching, email sequences, educational reference). Until this lands, next v3 handler work can't commit.
-2. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #35)
-3. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
-4. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point)
-5. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap; Railway now matches local byte-for-byte)
-6. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session, verified via byte-identical YAML round-trip test)
+1. **BACKLOG #44 (HIGH, new s28) — Create `rf_published_content` collection + migrate misplaced chunks.** Unblocks Domains 1/2/3 (Blogs, Lead magnets, Email sequences). ~45 min.
+2. **BACKLOG #46 (MED-HIGH, new s28) — Per-item review-and-select admin UI workflow.** Unblocks Domains 4c/7a/8a. Ties to #21.
+3. **BACKLOG #47 (MED-HIGH, new s28) — Multi-modal ingestion handler.** Unblocks Domains 5b/5c/11a. LARGE.
+4. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #44 + Domain 1 canonical HTML handler, see s28 CONTENT_SOURCES.md)
+5. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
+6. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point; now compounds with #46 collection-expansion work)
+7. **BACKLOG #45 (new s28) — Remove stale `client_rfids` from `rf_coaching_transcripts`.** Tactical cleanup.
+8. **BACKLOG #48 (new s28) — Intelligent-scan classifier for zoom recordings.** Gate for Domain 8a.
+9. **BACKLOG #49 (new s28) — Two-tier access decision (content-creation vs client-facing).** Dan decision pending.
+10. ~~BACKLOG #35~~ — ✅ resolved s28 (`docs/CONTENT_SOURCES.md` shipped, 489 lines, 14 domains, 13 target collections, 28 follow-up seeds)
+11. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap)
+12. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session)
+
+**Full s28 follow-up seed list** (28 items) lives in `docs/CONTENT_SOURCES.md` "Open follow-up BACKLOG items" section. Items #44-#49 above are the highest-priority subset promoted to proper BACKLOG entries; the rest stay in the doc and are promoted ad-hoc as priorities shift.
 
 ## What's declined (do not re-propose)
 

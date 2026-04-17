@@ -1106,7 +1106,21 @@ DFH chunks to verify they get fallback locators.
 
 ---
 
-### 35. Document content source-of-truth before bulk ingestion
+### 35. Document content source-of-truth before bulk ingestion — ✅ RESOLVED session 28
+**Priority:** Closed.
+
+**Closure (session 28):** Shipped `docs/CONTENT_SOURCES.md` (489 lines) after ~2 hours of domain-by-domain conversation with Dan. The doc scopes 14 content domains + anti-ingestion list + cross-cutting rules + ~28 follow-up BACKLOG seeds. Key framing decisions captured in the doc and landing as new BACKLOG items below:
+
+- **Collections architecture (13 target collections):** strict separation of external-approved (`rf_reference_library`) vs our-public (`rf_published_content`) vs paywalled curriculum (`rf_curriculum_paywalled`) vs sales playbook (`rf_sales_playbook`) vs marketing (`rf_marketing`) vs testimonials (`rf_testimonials`) vs visual library (`rf_visual_library`) vs supplements (`rf_supplements`) vs lab data (`rf_lab_data`) vs coaching transcripts (existing `rf_coaching_transcripts`) vs coaching visuals (`rf_coaching_visuals`) vs (conditional) internal knowledge (`rf_internal_knowledge`) vs metadata index (`rf_library_index`).
+- **Coaching-not-medicine framing:** no PHI; access control via Cloudflare Access allowlist, not content redaction. Client-identity metadata hardcoded-protected in rendering.
+- **RFID walkback:** `client_rfids` currently not usable (system incomplete); remove from existing chroma and reintroduce when finalized.
+- **Domain 4-OUT reversal:** TFF Program Contracts + cohort spreadsheets previously anti-ingestion, now IN scope for client-timeline linkage.
+- **Admin UI surface:** these 13 collections become the selection targets in `library_assignments`; significant UI expansion work ties to #21.
+
+The 28-item seed list stays in `docs/CONTENT_SOURCES.md` as the canonical source. The highest-priority subset is promoted to BACKLOG entries #44–#49 below for s29+ consideration.
+
+**Original scope text (kept as history for anyone cross-referencing):**
+
 **Priority:** HIGH. Blocks bulk ingestion of any text-bearing file type.
 
 **Scope:** Surfaced session 18. The corpus we're building has multiple file forms of the same content:
@@ -1117,19 +1131,11 @@ DFH chunks to verify they get fallback locators.
 
 Without a designated canonical source per content domain, we'll ingest near-duplicates and pollute retrieval.
 
-**Deliverable:** `docs/CONTENT_SOURCES.md` mapping content domain → canonical Drive folder(s) → file forms to ingest vs. skip. Format roughly:
-
-| Content domain | Canonical source | Skip |
-|---|---|---|
-| Blog posts | Published HTML on website | docx drafts, email broadcasts of blog content |
-| Lead magnets | The PDF or Google Doc actually delivered to customers | Drafts, Canva editor exports, internal review copies |
-| Coaching content | The transcript (already in `rf_coaching_transcripts`) | Email summaries, Google Doc recaps |
-| Email sequences | The docx of record | One-off sends, archived versions |
-| Educational reference | The A4M course PDFs and similar | Notes, summaries, blog versions of the same material |
+**Deliverable:** `docs/CONTENT_SOURCES.md` mapping content domain → canonical Drive folder(s) → file forms to ingest vs. skip.
 
 Dan decides the mappings; Claude documents. Becomes the input to selection decisions for any subsequent bulk ingestion.
 
-**Estimated effort:** ~1 hour of conversation with Dan to walk the inventory and decide canonical sources, then ~30 min to write the doc.
+**Estimated effort (actual s28):** ~2hr conversation + doc drafting, spanning 3 doc versions (v1 original → v2 after Dan corrections → v3 slim pass).
 
 ---
 
@@ -1326,3 +1332,71 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 **Estimated effort:** ~45 min including the round-trip test. Spend: $0.
 
 **Required before:** BACKLOG #42 (Railway sync) — the sync will ship the s24 citation_instructions to production, at which point Dr. Nashat saving either YAML via the admin UI could trigger the corruption path. Do #43 first, then #42.
+
+
+
+## NEW — added session 28 (from #35 CONTENT_SOURCES.md follow-up seed list)
+
+The full 28-item seed list lives in `docs/CONTENT_SOURCES.md`. The entries below are the highest-priority subset promoted to BACKLOG for s29+ scope consideration. The rest remain in the CONTENT_SOURCES doc and can be promoted here ad-hoc as priorities shift.
+
+### 44. Create `rf_published_content` collection + migrate misplaced chunks
+**Priority:** HIGH. Unblocks ingestion paths for Domains 1 (Blogs), 2 (Lead magnets), 3 (Email sequences) per CONTENT_SOURCES.md.
+
+**Scope:** Create the new Chroma collection `rf_published_content` for our public-facing educational content. Migrate the 8 existing v3 chunks currently misplaced in `rf_reference_library`:
+- Sugar Swaps chunk (confirmed our lead magnet, not external) → move to `rf_published_content`
+- 7 other v3 pdf chunks → per-chunk review to determine which are ours vs external; migrate accordingly
+
+After migration, `rf_reference_library` should contain only external-approved content (584 A4M + 13 DFH + any of the 8 that are confirmed external).
+
+**Anti-scope:** do not bundle new ingestion (blogs, lead magnets) into this work. Migration first; ingestion follows as separate scopes.
+
+**Estimated effort:** ~45 min for collection creation + chunk-level review + migration script. Zero new content ingested.
+
+### 45. Remove stale `client_rfids` from `rf_coaching_transcripts`
+**Priority:** MEDIUM. Tactical cleanup flagged in CONTENT_SOURCES.md Framing section.
+
+**Scope:** The `client_rfids` metadata field on existing `rf_coaching_transcripts` chunks contains values from an unfinished RFID system. These values are not usable for retrieval/linkage in their current state. Remove the field from all 9,224 chunks. When the RFID system is finalized (future work), re-populate via a dedicated backfill.
+
+**Anti-scope:** do not re-ingest transcript content. Metadata-field removal only via Chroma upsert-with-metadata-minus-field pattern.
+
+**Estimated effort:** ~30 min. Include a verification probe showing zero chunks retain `client_rfids` after run.
+
+### 46. Per-item review-and-select admin UI workflow
+**Priority:** MEDIUM-HIGH. Unblocks Domains 4c (sales playbook), 7a (1:1 zoom reconcile), 8a (zoom categorization) per CONTENT_SOURCES.md.
+
+**Scope:** Extend the admin UI beyond folder/file selection-only to support per-item review workflows where Dan must inspect individual files before marking them canonical or out. Needed for: FKSP Call Research (85 files), Curated Sales Call List (22 files), the 551 Christina+Nashat zoom recordings after intelligent-scan classification.
+
+**Deliverables:**
+- Per-file preview surface (file metadata + summary + optional LLM preview of content)
+- "Accept / Reject / Defer" buttons per item
+- Persists decisions alongside existing `selection_state.json`
+- Batch review mode for large folders
+
+**Anti-scope:** do not redesign the existing folder-level selection (that's #21). Add per-item as a new lane, not a replacement.
+
+**Estimated effort:** ~3-4 hr design + build. Scope a tight vertical slice first.
+
+### 47. Multi-modal ingestion handler (slide + transcript alignment)
+**Priority:** MEDIUM-HIGH. Unblocks Domains 5b (coaching visuals), 5c (Kajabi curriculum lesson videos), 11a (masterclasses) per CONTENT_SOURCES.md.
+
+**Scope:** Build an ingestion handler that processes video content with either (a) slide-deck source available — align PPTX slides with voiceover transcript (Option β, preferred, cheaper, more accurate), or (b) no slide source — frame-capture at scene changes + OCR (Option α, fallback).
+
+**Gating:** accuracy is non-negotiable — this unblocks the RF 2.0 BBT-trends feature which depends on correct visual extraction.
+
+**Estimated effort:** LARGE. Scope design session required before any build. Cost model for frame extraction + OCR per minute of video needed as input.
+
+### 48. Intelligent-scan classifier for zoom recordings
+**Priority:** MEDIUM. Gate for Domain 8a per CONTENT_SOURCES.md (551 recordings to categorize).
+
+**Scope:** LLM classifier that categorizes each zoom recording (coaching / sales / marketing / business-ops / unknown) based on transcript content + filename. Business-ops auto-skip; unknown flagged for Dan review. Output feeds into #46 per-item workflow.
+
+**Estimated effort:** ~2 hr once transcript-per-recording is available. Needs cost estimate against 551 × avg transcript length.
+
+### 49. Two-tier access decision — content-creation-tier vs client-facing-tier
+**Priority:** MEDIUM. Gate for Domain 9 per CONTENT_SOURCES.md. Dan decision needed before implementation.
+
+**Scope:** Decide whether to introduce a `rf_internal_knowledge` collection retrievable only by internal content-creation agents (Dan/Nashat/team), never by client-facing agents. Specific content pending this decision: EHT Summit Blueprints, strategic frameworks, internal playbooks in `1-operations/`.
+
+**Implementation sketch (if approved):** YAML allow-list of collections per agent — same mechanism as current per-agent per-collection rendering. Low-complexity extension.
+
+**Estimated effort:** ~15 min Dan decision conversation; if yes, ~1 hr schema + agent-config plumbing.

@@ -3362,3 +3362,101 @@ $0 total. No LLM calls. Railway build/compute costs are rounding-error.
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - Sugar Swaps: len=3737, strip-ON
 - Local-vs-Railway delta: **none** (first time since project start)
+
+---
+
+## Session 28 (cont.) — BACKLOG #35 RESOLVED — `docs/CONTENT_SOURCES.md` shipped (scope A, 2026-04-17)
+
+**Outcome:** Second scope of session 28, following scope B (Railway chroma sync). Shipped `docs/CONTENT_SOURCES.md` (489 lines) after ~2 hours of domain-by-domain conversation with Dan. The doc maps the full corpus across 14 content domains + anti-ingestion list + cross-cutting rules + 28 follow-up BACKLOG seeds. Scope B committed earlier as `c1db89d`; scope A to be committed in a second s28 commit alongside BACKLOG/STATE_OF_PLAY/HANDOVER updates and the s29 prompt.
+
+### How the conversation went
+
+Claude's first pass (v1, 394 lines) missed critical framing — lumped `rf_published_content` into `rf_reference_library` without flagging, applied PHI-adjacent privacy language to a coaching (not medical) business, and kept the default-restrictive anti-ingestion stance on TFF contracts / cohort spreadsheets.
+
+Dan's corrections drove a second pass (v2, 536 lines) that landed the right decisions but over-explained them — implementation sketches for features Dan hadn't asked to design (TFF client-access screening, intelligent-scan classifier, two-tier enforcement), ceremonial "per Dan s28:" quote attributions, multi-paragraph rationale where one sentence would do.
+
+Third pass (v3, 488 lines, +489 after the lab_data rename) preserved every decision and stripped ~48 lines of narration. Implementation sketches moved to BACKLOG seeds where they belong; doc became a decision map, not a design doc.
+
+Dan requested a visual redline for review; Claude generated side-by-side HTML (`/tmp/content_sources_v3_redline.html`) via Python `difflib.HtmlDiff` with color-coded add/remove/change highlighting. Both v1→v2 and v1→v3 redlines opened in browser for scanning.
+
+### Key framing decisions locked in v3
+
+1. **Collections architecture — 13 target collections with access-tier separation:**
+   - External approved only: `rf_reference_library` (605, currently mixed — migration tracked as #44)
+   - Our public educational: `rf_published_content` (proposed)
+   - Behind-paywall curriculum: `rf_curriculum_paywalled` (proposed)
+   - Sales playbook (IG DMs + sales calls): `rf_sales_playbook` (proposed)
+   - Marketing (masterclasses, Funnels, Meet & Greet): `rf_marketing` (proposed)
+   - Testimonials (multi-modal): `rf_testimonials` (proposed)
+   - Visual library (IG + Canva): `rf_visual_library` (proposed)
+   - Lab data (Biocanic + client-uploaded): `rf_lab_data` (proposed, renamed from `rf_biocanic` per Dan s28 "Biocanic library should be lab data library")
+   - Supplements: `rf_supplements` (proposed, defer)
+   - Coaching visuals (BBT/MSQ/labs from videos): `rf_coaching_visuals` (proposed, blocked)
+   - Coaching transcripts (existing, 9,224): `rf_coaching_transcripts`
+   - Internal knowledge (content-creation-tier only): `rf_internal_knowledge` (conditional on #49)
+   - Metadata index: `rf_library_index` (ADR_002 design, backfill pending)
+
+2. **Coaching-not-medicine framing.** No PHI (Protected Health Information) in the legal sense — this is a coaching business, not a medical practice. Access control via Cloudflare Access allowlist at production edge; client-identity metadata hardcoded-protected from YAML rendering but stored in chunks for longitudinal features. Clients share labs/MSQ/BBT/chat questions as coaching data, not clinical records.
+
+3. **RFID walkback.** `client_rfids` field in existing `rf_coaching_transcripts` flagged as stale — RFID system incomplete, current values unusable. Removal tracked as #45; re-introduction deferred until system is finalized.
+
+4. **Domain 4-OUT reversal.** TFF Program Contracts + cohort spreadsheets previously slated anti-ingestion; Dan s28 reversed to IN — critical for client-timeline linkage (lab-test-relative-to-program phase, first-name identification on call transcripts). Only `Client Complaints and Disputes/` retains (soft) anti-ingestion status.
+
+5. **Course curriculum consolidation.** FKSP, RH Detox, RH Preconception Detox are the same content per Dan — major scope reduction versus the original 4-program multi-modal re-ingest plan. Only two distinct programs remain (FKSP-family + TFF) for #47 multi-modal handler work.
+
+6. **New domains surfaced during conversation:**
+   - IG DMs + IG posts + Canva → Domain 14 Visual Library (massive polished-visual repo)
+   - Testimonials (images, videos, screenshots, text extractions) → Domain 11b separate collection
+   - Funnels copywriting → Domain 11c (high-value costly copy)
+   - Masterclasses + Meet & Greet → Domain 11a marketing (moved Meet & Greet from 4a per Dan: "public marketing content like masterclasses")
+   - Sales playbook expansion → Dan's high-close accelerator calls + prior-salesperson comparative low-close calls (need discovery in Taylor's shared drives)
+   - Lab data library (renamed from Biocanic) → Biocanic + client-provided labs as separate sources
+
+7. **Two-tier access question opened.** Some operational content (EHT Summit Blueprints, strategic frameworks) valuable for internal content-creation agents but must never surface to client-facing agents. Proposed `rf_internal_knowledge` collection with YAML agent-level allow-list. Dan decision tracked as #49.
+
+### Follow-up items promoted to BACKLOG
+
+Six highest-priority items from the 28-item seed list in CONTENT_SOURCES.md:
+- **#44 HIGH** — Create `rf_published_content` + migrate misplaced chunks (Sugar Swaps + 6 other v3 chunks pending per-chunk review)
+- **#45 MED** — Remove stale `client_rfids` from `rf_coaching_transcripts`
+- **#46 MED-HIGH** — Per-item review-and-select admin UI workflow (Domains 4c/7a/8a)
+- **#47 MED-HIGH / LARGE** — Multi-modal ingestion handler (Domains 5b/5c/11a)
+- **#48 MED** — Intelligent-scan classifier for zoom recordings (Domain 8a)
+- **#49 MED** — Two-tier access decision (Domain 9)
+
+Remaining 22 items stay in `docs/CONTENT_SOURCES.md` seed list and will be promoted ad-hoc as priorities shift.
+
+### Files modified (scope A)
+
+```
+docs/CONTENT_SOURCES.md      NEW, 489 lines
+docs/BACKLOG.md              #35 closed; #44–#49 added
+docs/STATE_OF_PLAY.md        CURRENT STATE: priorities rewritten; collections table expanded from 4 → 13 entries
+docs/HANDOVER.md             this scope-A section
+docs/NEXT_SESSION_PROMPT_S29.md   NEW
+```
+
+### Session 28 total spend
+
+$0 across both scopes (B Railway sync + A CONTENT_SOURCES.md). Two commits total: `c1db89d` (scope B) + one final s28 close commit (scope A + governance + s29 prompt).
+
+### Lessons carried forward
+
+1. **Over-explanation is a tax.** V2→v3 of CONTENT_SOURCES.md cut ~48 lines of narration (implementation sketches, ceremonial attribution, redundant rationale) without losing any decision. Rule of thumb for canonical source-of-truth docs: decisions + one-sentence rationale per decision, not design essays. Implementation sketches belong in ADRs or BACKLOG items, not the map itself.
+
+2. **Flag silent architectural changes.** The v1 draft silently folded `rf_published_content` into `rf_reference_library` — Dan caught it ("DO NOT CHANGE WHAT WE HAVE DISCUSSED BEFORE WITHOUT CLEARLY TELLING ME"). Rule: any time a prior-session decision is being re-interpreted or reversed, the change must be flagged in the main conversation, not buried in a doc edit.
+
+3. **Coaching-not-medicine framing matters upstream.** Applying HIPAA-adjacent language to a coaching business over-restricts what data can be captured for useful features (RF 2.0 BBT trends, longitudinal analysis). Access control at the production edge + hardcoded-protected rendering fields are the right mechanism, not content redaction.
+
+4. **Visual redline beats unified diff for review.** Dan's decision latency dropped noticeably once a side-by-side HTML redline was available vs trying to follow unified-format diff output in chat. Useful recipe for future doc-review sessions: generate `difflib.HtmlDiff.make_table()` output with classic add/remove/change color coding.
+
+5. **1M context window changes Operating Model #6 thresholds.** Dan flagged mid-session that the desktop app was showing 26% of 1M used (~740K remaining) when Claude reported "14% remaining" (stale 200K-baseline math). Warning thresholds should recalibrate: 30%/20% warnings against 200K become ~240K/200K absolute against 1M. Noted in s29 prompt.
+
+### Chroma state at end of session 28
+
+**Unchanged from scope B close (no writes in scope A):**
+- `rf_reference_library`: 605 chunks (8 flagged for #44 migration)
+- `rf_coaching_transcripts`: 9,224 chunks (`client_rfids` flagged for #45 removal)
+- v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
+- OCR cache: 34 files
+- Local-vs-Railway delta: none (scope B achievement preserved)
