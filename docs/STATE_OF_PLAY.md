@@ -21,9 +21,9 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 
 | Collection | Chunks | Status | Known pollution |
 |---|---|---|---|
-| `rf_reference_library` | **605** | Active, mixed v1/v2/v3 — **tightened s28 to external-approved only; 8 v3 chunks misplaced, migration tracked as #44** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
+| `rf_reference_library` | **597** | Active, external-approved only — **#44 migration complete s28-extended (605→597, 8 v3 chunks moved out)** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
 | `rf_coaching_transcripts` | 9,224 | Active — **`client_rfids` field flagged stale s28 for removal per #45** | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
-| `rf_published_content` | not created | **Proposed s28** — target for our public-facing educational (blogs, lead magnets, email); creation tracked as #44 | — |
+| `rf_published_content` | **8** | **Active as of s28-extended** — 7 Egg Health Guide.pdf + 1 Sugar Swaps Google Doc chunks migrated from rf_reference_library per #44 | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
 | `rf_curriculum_paywalled` | not created | **Proposed s28** — target for behind-paywall course material (FKSP, TFF, RH Detox, etc.) | — |
 | `rf_sales_playbook` | not created | **Proposed s28** — target for IG DMs + sales call transcripts (high-close + comparative) | — |
 | `rf_marketing` | not created | **Proposed s28** — masterclasses, Meet & Greet, Funnels copy | — |
@@ -96,20 +96,22 @@ test_format_context_s24.py             (79/79)
 
 ## What's next (active priorities)
 
-1. **BACKLOG #44 (HIGH, new s28) — Create `rf_published_content` collection + migrate misplaced chunks.** Unblocks Domains 1/2/3 (Blogs, Lead magnets, Email sequences). ~45 min.
-2. **BACKLOG #46 (MED-HIGH, new s28) — Per-item review-and-select admin UI workflow.** Unblocks Domains 4c/7a/8a. Ties to #21.
-3. **BACKLOG #47 (MED-HIGH, new s28) — Multi-modal ingestion handler.** Unblocks Domains 5b/5c/11a. LARGE.
-4. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #44 + Domain 1 canonical HTML handler, see s28 CONTENT_SOURCES.md)
-5. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
-6. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point; now compounds with #46 collection-expansion work)
-7. **BACKLOG #45 (new s28) — Remove stale `client_rfids` from `rf_coaching_transcripts`.** Tactical cleanup.
-8. **BACKLOG #48 (new s28) — Intelligent-scan classifier for zoom recordings.** Gate for Domain 8a.
-9. **BACKLOG #49 (new s28) — Two-tier access decision (content-creation vs client-facing).** Dan decision pending.
-10. ~~BACKLOG #35~~ — ✅ resolved s28 (`docs/CONTENT_SOURCES.md` shipped, 489 lines, 14 domains, 13 target collections, 28 follow-up seeds)
-11. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap)
-12. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session)
+1. **BACKLOG #56 (HIGH) — HTML handler + blog export pipeline.** Now unblocked (#44 landed s28-extended). Biggest single file-processing capability add — Domain 1 Blogs ingestion. ~3-4 hr.
+2. **BACKLOG #46 (MED-HIGH) — Per-item review-and-select admin UI workflow.** Unblocks Domains 4c/7a/8a. Ties to #21 + #72.
+3. **BACKLOG #47 (MED-HIGH / LARGE) — Multi-modal ingestion handler.** Unblocks Domains 5b/5c/11a. Design doc first.
+4. **BACKLOG #45 (MED) — Remove stale `client_rfids` from `rf_coaching_transcripts`.** Tactical cleanup.
+5. **BACKLOG #57 (MED-HIGH) — Email platform export mechanism.** Domain 3 gate. Ties to #56 (HTML handler).
+6. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #56 HTML handler — was also gated on #44 which is now closed)
+7. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
+8. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point; now compounds with #46 + #72 collection-expansion work)
+9. **BACKLOG #48 — Intelligent-scan classifier for zoom recordings.** Gate for Domain 8a.
+10. **BACKLOG #49 — Two-tier access decision (content-creation vs client-facing).** Dan decision pending.
+11. ~~BACKLOG #44~~ — ✅ resolved s28-extended (`rf_published_content` collection created + 8 v3 chunks migrated from rf_reference_library; 605→597, 0→8, conservation verified)
+12. ~~BACKLOG #35~~ — ✅ resolved s28 (`docs/CONTENT_SOURCES.md` shipped, 489 lines, 14 domains, 13 target collections, 28 follow-up seeds)
+13. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap)
+14. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session)
 
-**Full s28 follow-up seed list** (28 items) lives in `docs/CONTENT_SOURCES.md` "Open follow-up BACKLOG items" section. Items #44-#49 above are the highest-priority subset promoted to proper BACKLOG entries; the rest stay in the doc and are promoted ad-hoc as priorities shift.
+**Full s28 follow-up list** now at BACKLOG #44-#73 (30 entries promoted from the `docs/CONTENT_SOURCES.md` seed list; #44 already closed). The full list above shows top priorities; see BACKLOG.md for full scope of each.
 
 ## What's declined (do not re-propose)
 

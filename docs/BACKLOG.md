@@ -1339,18 +1339,38 @@ Per Dan's session-19 directive (no Chroma writes), the 8 existing v3 chunks (7 P
 
 The full 28-item seed list lives in `docs/CONTENT_SOURCES.md`. The entries below are the highest-priority subset promoted to BACKLOG for s29+ scope consideration. The rest remain in the CONTENT_SOURCES doc and can be promoted here ad-hoc as priorities shift.
 
-### 44. Create `rf_published_content` collection + migrate misplaced chunks
-**Priority:** HIGH. Unblocks ingestion paths for Domains 1 (Blogs), 2 (Lead magnets), 3 (Email sequences) per CONTENT_SOURCES.md.
+### 44. Create `rf_published_content` collection + migrate misplaced chunks — ✅ RESOLVED session 28-extended
+**Priority:** Closed.
 
-**Scope:** Create the new Chroma collection `rf_published_content` for our public-facing educational content. Migrate the 8 existing v3 chunks currently misplaced in `rf_reference_library`:
-- Sugar Swaps chunk (confirmed our lead magnet, not external) → move to `rf_published_content`
-- 7 other v3 pdf chunks → per-chunk review to determine which are ours vs external; migrate accordingly
+**Closure (s28-extended, 2026-04-17):** Migration executed via `scripts/migrate_s28_published_content_s29.py --commit`. Inventory finding: **all 8 v3 chunks were OUR content** (not external) — 7 `Egg Health Guide.pdf` chunks (the `[RF] Optimizing Egg Health Guide & Checklist` lead magnet) + 1 `[RH] The Fertility-Smart Sugar Swap Guide` chunk. All 8 migrated to `rf_published_content`.
 
-After migration, `rf_reference_library` should contain only external-approved content (584 A4M + 13 DFH + any of the 8 that are confirmed external).
+**Verification (internal + external):**
+- rf_reference_library: 605 → **597** chunks (clean delta)
+- rf_published_content: 0 → **8** chunks (new collection)
+- rf_coaching_transcripts: 9,224 (unchanged)
+- Conservation: 597 + 8 = 605 ✓ (no data loss)
+- v3 chunks remaining in rf_reference_library: 0 ✓
+- Category breakdown in rf_published_content: 7 pdf + 1 v2_google_doc ✓
+- library_name metadata updated: all 8 chunks now `library_name="rf_published_content"` ✓
+- Sugar Swaps preserved: len=3737, no canva, no COVER (strip-ON property preserved across migration) ✓
+- Embedding preservation: query "sugar alternatives for fertility" → Sugar Swaps chunk as top hit with distance 0.3692 (working similarity) ✓
+- Regression suite: 14/14 test scripts still passing post-migration ✓
 
-**Anti-scope:** do not bundle new ingestion (blogs, lead magnets) into this work. Migration first; ingestion follows as separate scopes.
+**Execution details:**
+- New collection created with `OpenAIEmbeddingFunction(model="text-embedding-3-large")` — matches `rf_reference_library` embedding function exactly, so stored vectors stay comparable across collections.
+- Chunks pulled with `include=["embeddings", "metadatas", "documents"]` to preserve vectors without re-embedding (zero embedding cost, zero similarity drift).
+- Metadata update: `library_name` field changed from `rf_reference_library` → `rf_published_content` on each of the 8 chunks.
+- Upsert to destination, then delete from source — halt-and-verify between steps in the script so failed verify aborts before the delete. Script's internal verification + external fresh-client probe both passed.
 
-**Estimated effort:** ~45 min for collection creation + chunk-level review + migration script. Zero new content ingested.
+**Spend:** $0 (zero LLM calls, zero new embeddings — existing vectors reused).
+
+**Files touched:**
+- `scripts/migrate_s28_published_content_s29.py` — NEW, migration script with dry-run default + --commit flag
+- `chroma_db/*` — 8 chunks moved between collections (API-mediated)
+
+**Follow-up not done in this scope:** Sugar Swaps is still in its Google Doc form (v3_category=v2_google_doc). Per Domain 2 canonical decision in CONTENT_SOURCES.md, the PDF form should eventually replace the Google Doc form. That's a separate v3 re-ingestion task against the Sugar Swaps PDF file — tracked as a new BACKLOG item below (#73).
+
+**Unblocks:** Domain 1 (Blogs), Domain 2 (Lead magnets), Domain 3 (Email sequences) target-collection prerequisites are now met. First file-processing handler work (#56 HTML handler) can now proceed.
 
 ### 45. Remove stale `client_rfids` from `rf_coaching_transcripts`
 **Priority:** MEDIUM. Tactical cleanup flagged in CONTENT_SOURCES.md Framing section.
@@ -1400,3 +1420,137 @@ After migration, `rf_reference_library` should contain only external-approved co
 **Implementation sketch (if approved):** YAML allow-list of collections per agent — same mechanism as current per-agent per-collection rendering. Low-complexity extension.
 
 **Estimated effort:** ~15 min Dan decision conversation; if yes, ~1 hr schema + agent-config plumbing.
+
+
+
+## NEW — added session 28 close (remaining 23 seeds promoted from CONTENT_SOURCES.md)
+
+Entries below are the remaining follow-up seeds from `docs/CONTENT_SOURCES.md` promoted to proper BACKLOG entries. Collectively they cover collection creation, file-processing handlers, discovery tasks, and design decisions needed to execute against the domain map.
+
+### 50. Create `rf_curriculum_paywalled` collection
+**Priority:** MEDIUM. Gate for Domains 4a / 4d / 5c / 7d ingestion.
+**Scope:** Create the Chroma collection. Gated on paywall-access-enforcement design (ties to #46 per-item review + #49 two-tier access + possibly #69 TFF client-access screening). Also see #70 naming decision (single vs split for text-vs-multimodal).
+**Effort:** ~30 min collection creation + schema metadata fields; longer if access enforcement bundled.
+
+### 51. Create `rf_sales_playbook` collection
+**Priority:** MEDIUM. Gate for Domain 4c.
+**Scope:** Create the Chroma collection. Gated on IG DMs export pipeline (#58) + sales-call source discovery (#63) + per-item review workflow (#46).
+**Effort:** ~30 min collection creation; handler work separate.
+
+### 52. Create `rf_marketing` collection
+**Priority:** MEDIUM. Gate for Domain 11 (masterclasses, Meet & Greet, Funnels copy, RF Meet the Doctors).
+**Scope:** Create the Chroma collection. Gated on multi-modal handler (#47) for mp4 content + Funnels sub-folder inventory (#67).
+**Effort:** ~30 min collection creation.
+
+### 53. Create `rf_testimonials` collection
+**Priority:** MEDIUM. Gate for Domain 11b.
+**Scope:** Split from `rf_marketing` because multi-modal (images + videos + screenshots + text extractions) and distinct retrieval intent (sales-agent closing patterns, content-creation surfaces, website/Shopify pieces).
+**Effort:** ~30 min collection creation; gated on testimonial handler #61 + 3-marketing sub-folder inventory #67.
+
+### 54. Create `rf_visual_library` collection
+**Priority:** MEDIUM. Gate for Domain 14.
+**Scope:** Separate from `rf_marketing` because visual-library retrieval intent is "find a polished visual to reuse," marketing is "find teaching/copy content." Gated on IG archive export (#60) + Canva export (#59).
+**Effort:** ~30 min collection creation.
+
+### 55. Create `rf_lab_data` + design client-lab-upload intake pipeline
+**Priority:** MEDIUM-HIGH. Gate for Domain 13 (lab data library — Biocanic + client-provided).
+**Scope:** Create the Chroma collection. Design the admin-UI upload surface for clients to share labs directly (uploads, shared in coaching calls, emailed in). Includes a PDF lab-report parser for common lab formats (Quest, LabCorp, Biocanic PDF exports). PII handling consistent with Domain 4b hardcoded-protected metadata pattern.
+**Effort:** Collection creation ~30 min; upload UI + parser ~1-2 days depending on lab-format coverage.
+
+### 56. HTML handler + blog export pipeline
+**Priority:** HIGH. Gate for Domain 1 (blogs). Blocks #36 (April-May 2023 Blogs commit).
+**Scope:** Build a v3 handler for HTML content. Includes: BeautifulSoup extraction, dedup integration (stage-1 md5 + stage-2 content_hash), canonical content boundary detection (strip navigation/ads/comments), image-reference handling. Also: decide source — live-scrape dralnashat.com (if it exposes blog RSS/sitemap), WordPress export, or Kajabi-backup extraction.
+**Effort:** ~2-3 hr handler + test; + ~1-2 hr source-pipeline decision and plumbing. Matches existing v3 handler pattern.
+**Unblocks:** Domain 1 canonical ingestion. Domain 3 Email sequences (if platform exports render to HTML).
+
+### 57. Email platform export mechanism
+**Priority:** MEDIUM-HIGH. Gate for Domain 3 (email sequences).
+**Scope:** Identify authoritative email platform (Kajabi vs ActiveCampaign vs Mailchimp), then build an export pipeline. Export surface likely HTML (rendered email body) + metadata (sequence name, send date, audience tag). Integrates with HTML handler (#56).
+**Effort:** ~1 day discovery + build; depends heavily on which platform is authoritative and what API/export is available.
+
+### 58. IG DMs export mechanism
+**Priority:** MEDIUM. Gate for Domain 4c (sales playbook) + partial Domain 14.
+**Scope:** Design and build a way to extract Nashat's IG DM conversations (marketing, listening, closing clients). Source: Meta Business Suite export or Instagram Graph API. Output: threaded conversations with timestamps, participant tagging, message types (text, image, reel). Consider rate-limiting and incremental sync.
+**Effort:** Discovery ~2 hr; build ~1-2 days; ongoing sync design separate.
+
+### 59. Canva export pipeline
+**Priority:** MEDIUM. Gate for Domain 14 (visual library).
+**Scope:** Design Canva corporate account export. Likely options: (a) Canva API if available in Nashat's plan, (b) manual download + batch ingestion, (c) browser-automation. Output: polished visuals with metadata (project name, tags, date created).
+**Effort:** Discovery ~2 hr; build varies widely by chosen path (~4 hr for manual, ~1 day for API).
+
+### 60. IG posts archive export
+**Priority:** MEDIUM. Gate for Domain 14.
+**Scope:** Export Nashat's IG account posts (image + caption). Source: Meta Business Suite export or IG Graph API. Overlaps with #58 IG DMs but posts are a separate surface.
+**Effort:** ~4-6 hr once Meta Business Suite access established.
+
+### 61. Testimonial multi-modal handler
+**Priority:** MEDIUM. Gate for Domain 11b (testimonials).
+**Scope:** Handler for testimonial assets — images, videos, screenshots, text extractions. Each form needs different processing: image → OCR + caption metadata; video → transcript + key-frame extraction; screenshot → OCR; text → direct chunk. Outputs single collection with modality metadata.
+**Effort:** ~1-2 days; reuses some infrastructure from #47 multi-modal handler.
+
+### 62. PDF polish-check gate
+**Priority:** LOW-MEDIUM. Gate for Domain 2 (lead magnets) clean ingestion.
+**Scope:** Ensure a PDF being ingested as a lead magnet is a polished final, not an interim shared draft. Options: (a) filename convention check (`[RF] <Name>.pdf` pattern inside `[RF] <Name>/` folder), (b) pre-ingest admin-UI "confirm final" flag per file, (c) visual spot-check workflow with sign-off.
+**Effort:** ~2-4 hr depending on chosen path.
+
+### 63. Discovery — find high-close accelerator + prior-salesperson calls
+**Priority:** MEDIUM. Gate for Domain 4c sales-playbook content.
+**Scope:** Nashat's very-high-close-% fertility-accelerator sales calls + prior-salesperson lower-close-% calls (20-30%) are not in current walked Drives. Likely locations: Taylor's shared drive, other salespeople's personal/shared drives. Request access, walk the structure, add to inventory.
+**Effort:** ~1-2 hr per drive once access granted.
+
+### 64. 1-operations sub-folder audit
+**Priority:** LOW. Gate for Domain 9 anti-ingestion rollout + #49 two-tier access decision.
+**Scope:** Per-sub-folder inspection of `1-operations/`: Masterfiles, SOPS, Training & Tutorials, Systems, Website Development, Teams, Domain Troubleshooting, Critical Numbers, Assets, To Organise. Decide per-folder: client-facing-anti-ingestion / content-creation-tier candidate / skip / unknown.
+**Effort:** ~1-2 hr walk + Dan review.
+
+### 65. 6-ideas-planning-research sub-folder audit
+**Priority:** LOW. Gate for Domain 10 drive 6 scope.
+**Scope:** Per-sub-folder inspection of `6-ideas-planning-research/`: AI Resources, Biz Coaching, Competitive Analyses, Conscious Copy course worksheets, Fertility Group Programs, Konain Funnel Strategies, Recruitment Resources, Reimagined MD, Socialthority Selling System, Yuri P and L. Decide per-folder scope.
+**Effort:** ~1 hr walk + Dan review.
+
+### 66. TFF slide-deck source discovery
+**Priority:** MEDIUM. Gate for Domain 5c TFF multi-modal re-ingest (#47 specifically for TFF program).
+**Scope:** Determine whether TFF has a PPTX slide-deck source analogous to FKSP's 32 PPTX in `10-external-content/Kajabi Backups/1. Fertility Kickstart Program/FKSP Lesson Slides/`. If yes, TFF multi-modal uses Option β (slide-deck alignment). If no, falls back to Option α (frame-capture + OCR).
+**Effort:** ~1 hr discovery.
+
+### 67. 3-marketing sub-folder inventory
+**Priority:** MEDIUM. Gate for Domain 11b / 11c / 11d.
+**Scope:** Walk and surface contents of `3-marketing/9. Testimonials & Case Studies/`, `3. Funnels/`, `11. Summit/`, `8. Collabs/`, `12. Affiliates/`, `6. Facebook Ads/`, `1. Brand Assets/`. Produce per-folder categorization matching domain map.
+**Effort:** ~2 hr walk + categorization.
+
+### 68. Cross-domain dedup canonical-beat rules
+**Priority:** MEDIUM. Required before Domains 1 + 3 + 11 + 14 ship together.
+**Scope:** Design explicit canonical-beat rules for content that authors once but distributes multiple ways. Examples: blog content authored once + emailed (Domain 1 vs 3 overlap), masterclass with blog-worthy teaching (Domain 1 vs 11a overlap), IG post sharing a testimonial (Domain 11b vs 14 overlap). Existing stage-1 md5 + stage-2 content_hash cover trivial cases; need explicit priority rules for lineage-overlap cases.
+**Effort:** ~2-4 hr design doc + update to ingester dedup logic.
+
+### 69. TFF client-access screening feature decision
+**Priority:** LOW-MEDIUM. Optional feature per Domain 5c note.
+**Scope:** Decide whether to implement content screening that filters TFF-paid-only content to TFF-tier clients (not to higher-tier clients who have broader program access, but also not to non-TFF clients who shouldn't see TFF-specific material). Implementation: `program_tier` metadata field + retrieval-layer filter + admin UI per-client entitlement.
+**Effort:** ~15 min Dan decision; if yes, ~2-4 hr schema + retrieval filter + admin-UI plumbing.
+
+### 70. Paywalled curriculum collection naming — single vs split
+**Priority:** LOW. Gate for #50 (`rf_curriculum_paywalled` creation).
+**Scope:** Decide: one collection `rf_curriculum` holds text + multi-modal content with `modality` metadata field, OR two collections `rf_curriculum_text` + `rf_curriculum_multimodal`. Driven by empirical retrieval behavior expected at query time.
+**Effort:** ~15 min decision.
+
+### 71. Ingest TFF Program Contracts + cohort spreadsheets
+**Priority:** MEDIUM. Operational unblock per Domain 4-OUT reversal.
+**Scope:** Previously marked anti-ingestion, reversed s28 per Dan — these records enable client-timeline linkage (lab-test-relative-to-program-phase retrieval, first-name identification on call transcripts). Ingest into `rf_curriculum_paywalled` (or a dedicated client-timeline metadata surface). Hardcoded-protected client-identity fields per Domain 4b pattern.
+**Effort:** ~2-4 hr including per-file review, PDF text extraction for contracts, spreadsheet parsing for cohort data.
+
+### 72. Collection-expansion admin UI work
+**Priority:** MEDIUM-HIGH. Compounds with #21 (folder-selection UI redesign) + #46 (per-item review workflow).
+**Scope:** The admin UI currently assigns folders/files to 2 active collections. When the 11+ collections from CONTENT_SOURCES.md exist, the UI needs: dropdown of all collections with descriptions + tier badges, agent-to-collection allow-list configuration (per #49 two-tier access), per-item review workflow (per #46), PDF polish-check flag (per #62).
+**Effort:** ~1-2 full sessions of UI design + build. Treat as one coherent scope with #21.
+
+### 73. Sugar Swaps PDF re-ingest (Domain 2 canonical form correction)
+**Priority:** LOW. Opened s28-extended post-#44 migration.
+**Scope:** Currently Sugar Swaps is ingested in Google Doc form (`v3_category=v2_google_doc`, len=3737) in `rf_published_content`. Per CONTENT_SOURCES.md Domain 2 canonical decision, lead magnets should be ingested as their PDF form. Re-ingest `[RF] The Fertility-Smart Sugar Swap Guide.pdf` (file_id `1P699Ku6y_8wpxj-` per Drive walk) via v3 pipeline, upsert into `rf_published_content`, remove the Google Doc form chunk.
+**Effort:** ~30 min (v3 dry-run → --commit → verify). Zero LLM spend beyond v3's standard embedding cost on one re-ingested file.
+**Anti-scope:** do not bundle with other lead-magnet re-ingestions. Single-file sanity test first.
+
+### 74. Railway re-sync after #44 migration
+**Priority:** LOW-MEDIUM. Opened s28-extended post-#44.
+**Scope:** Post-#44, local has `rf_published_content` (8 chunks) + `rf_reference_library` (597) while Railway still has the pre-migration state (rf_reference_library=605, no rf_published_content). The 8 chunks are present on both sides just in different collections, so retrieval behavior is minimally affected until agents start retrieving from `rf_published_content` specifically. Re-sync Railway via the Z1 tarball-bootstrap playbook (per #42 s28 closure) when the next Railway-touching scope lands — or bundle with a later sync that aggregates multiple local-vs-Railway deltas.
+**Effort:** ~15 min monitoring (Z1 playbook is ~12 min download over trycloudflare); or batched with a future sync.
+**Anti-scope:** do not re-sync in isolation. Bundle with subsequent migrations or feature work that needs to reach production.

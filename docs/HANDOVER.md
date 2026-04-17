@@ -3460,3 +3460,93 @@ $0 across both scopes (B Railway sync + A CONTENT_SOURCES.md). Two commits total
 - v3 chunks total: 8 (7 pdf + 1 v2_google_doc)
 - OCR cache: 34 files
 - Local-vs-Railway delta: none (scope B achievement preserved)
+
+---
+
+## Session 28 (extended) — BACKLOG #44 RESOLVED + #50-#73 opened (scope C, 2026-04-17)
+
+**Outcome:** Dan asked to continue past the formal s28 close to "fill the backlogs and proceed to adding file processing capabilities." Expanded BACKLOG from 6 new entries to 30 (promoted the remaining 22 seeds from `CONTENT_SOURCES.md` as #50-#72, plus #73 for Sugar Swaps PDF re-ingest). Then executed the foundational unblock: #44 `rf_published_content` creation + migration of 8 misplaced chunks.
+
+### Session-boundary discussion
+
+Dan paused before Chroma write to verify alignment with the original Desktop→Code handover. Response: confirmed in-line with all flight rules, governance triggers, cost gates, anti-goals, and files-not-to-touch list, but flagged session-boundary ambiguity (no fresh Step 0 ceremony for this continuation). Dan green-lit continuation with protocols preserved: "we have higher context window here in code so can do more as long it doesn't waste processing and genuinely helps. But keep the protocols."
+
+Ran abbreviated Step 0 before the migration: working tree expected, top commit `585261a`, OPENAI_API_KEY available, v3 loader unchanged, Chroma state 605/9224/8 v3/Sugar Swaps 3737 (matched pre-migration expectations), regression suite 14/14 passing. All green; proceeded with --commit.
+
+### #44 migration — execution
+
+**Inventory finding:** all 8 v3 chunks in `rf_reference_library` were OUR content, not external — 7 `Egg Health Guide.pdf` chunks (from the `[RF] Optimizing Egg Health Guide & Checklist` lead magnet) + 1 `[RH] The Fertility-Smart Sugar Swap Guide` chunk. All 8 moved to `rf_published_content`.
+
+**Migration script:** `scripts/migrate_s28_published_content_s29.py` — dry-run default + --commit flag. Created new collection with the same `OpenAIEmbeddingFunction(model="text-embedding-3-large")` as `rf_reference_library` so stored vectors stay comparable. Chunks pulled with `include=["embeddings", "metadatas", "documents"]` — preserved vectors verbatim, zero embedding cost, zero similarity drift. Metadata `library_name` field updated per chunk; upserted to new collection; originals deleted from source only after destination-verify passed.
+
+**Verification (internal + external fresh-client probe + regression):**
+- rf_reference_library: 605 → 597 ✓
+- rf_published_content: 0 → 8 ✓
+- rf_coaching_transcripts: 9,224 (unchanged) ✓
+- Conservation check: 597 + 8 = 605 (no data loss) ✓
+- v3 chunks remaining in rf_reference_library: 0 ✓
+- Category breakdown in rf_published_content: pdf=7, v2_google_doc=1 ✓
+- library_name values in rf_published_content: {"rf_published_content"} ✓
+- Sugar Swaps preserved: len=3737, no canva, no COVER ✓
+- Embedding preservation via query sanity: "sugar alternatives for fertility" → Sugar Swaps chunk top-hit with distance 0.3692 ✓
+- Regression suite: 14/14 test scripts still PASS post-migration ✓
+
+### BACKLOG expansion (#50-#73)
+
+23 new entries promoted from CONTENT_SOURCES.md follow-up seeds. Categories:
+- **Collection creation (#50-#55):** rf_curriculum_paywalled, rf_sales_playbook, rf_marketing, rf_testimonials, rf_visual_library, rf_lab_data
+- **Handlers/pipelines (#56-#62):** HTML blog export, email platform export, IG DMs export, Canva export, IG posts archive, testimonial multi-modal handler, PDF polish-check gate
+- **Discovery (#63-#67):** sales calls in Taylor's drives, 1-operations audit, 6-ideas audit, TFF slide-deck source, 3-marketing sub-folder inventory
+- **Design decisions (#68-#70):** cross-domain dedup canonical-beat rules, TFF client-access screening, paywalled collection naming
+- **Operational (#71-#73):** TFF contracts + cohort spreadsheets ingestion, admin UI collection-expansion, Sugar Swaps PDF re-ingest
+
+### Files modified (scope C)
+
+```
+scripts/migrate_s28_published_content_s29.py   NEW, migration script (dry-run default + --commit)
+docs/BACKLOG.md                                 #44 marked RESOLVED; #50-#73 added
+docs/STATE_OF_PLAY.md                           Collections table: rf_reference_library 605→597,
+                                                 rf_published_content 0→8 (active); priorities list
+                                                 rewritten with #56 HTML as new top pick
+docs/HANDOVER.md                                this scope-C section
+```
+
+### Files NOT touched (intentional)
+
+- `chroma_db/*` (direct filesystem) — only API-mediated modifications via Chroma client, consistent with prior #37/#39 patterns
+- Ingester/loaders — migration script doesn't touch them
+- Rag server / display.py — no scope
+- The three demoted plan docs — untouched
+
+### Session 28-extended spend
+
+$0. Zero LLM calls (embeddings preserved from existing vectors). Regression runs were offline synthetic tests.
+
+### Lessons carried forward to s29
+
+1. **Chroma migrations should preserve embeddings verbatim.** Pulling chunks with `include=["embeddings", ...]` and upserting into the new collection with those same vectors avoids both cost and drift. The pattern used in `migrate_s28_published_content_s29.py` is reusable for any cross-collection migration.
+
+2. **Dry-run + commit-flag is the right pattern for Chroma-write scripts.** Matches the v3 dry-run pattern established in s16-s21. Default-dry prevents accidental writes.
+
+3. **Session-boundary halts should be pragmatic, not ceremonial.** When Dan extends a session past its nominal close to execute against newly-opened BACKLOG items, an abbreviated Step 0 (fresh state probe + tool smoke + regression check) formalizes continuity without wasting budget on ceremony that doesn't add signal.
+
+4. **"All our content, not external" confirmation matters.** The 7 Egg Health chunks plus Sugar Swaps — a pre-migration inventory found all 8 were ours. Had even one been external, it would have stayed in `rf_reference_library`. Never assume migration scope without inventory.
+
+### Open items at s28-extended close
+
+- **#56 HTML handler** is the clear next build step (unblocks Domain 1 Blogs ingestion)
+- All 30 new BACKLOG items (#44-#73; #44 closed) are now visible in the priority list
+- s29 prompt at `docs/NEXT_SESSION_PROMPT_S29.md` needs a refresh note: Step 0.3 expected state now `rf_reference_library=597`, `rf_published_content=8`, tech-lead rec shifted from #44 to #56
+- **Full Step 1.5 audit still due: session 31** (s26 was last)
+
+### Chroma state at end of session 28-extended
+
+**Local:**
+- `rf_reference_library`: **597 chunks** (external-approved only, clean)
+- `rf_published_content`: **8 chunks** (NEW, our public educational — 7 Egg Health + 1 Sugar Swaps)
+- `rf_coaching_transcripts`: 9,224 chunks (`client_rfids` still flagged for #45 removal)
+- Total: 9,829 chunks across 3 collections
+- v3 chunks total: 8 (all in rf_published_content now)
+- OCR cache: 34 files (unchanged)
+
+**Railway:** still matches the post-scope-B state (605/9224/pre-migration) — **new divergence from local until #74 Railway re-sync**. Not urgent: the 8 chunks are present on both sides (just in different collections), so retrieval behavior is minimally affected until agents start retrieving from `rf_published_content` specifically. Re-sync when the next Railway-touching scope lands.

@@ -13,7 +13,7 @@ This prompt is compact. The "carries forward unchanged" references below resolve
 
 **This bootstrap pattern carries forward to s30+.** When writing the s30 prompt at session close, copy this block and bump the S28/s28 references to S29/s29.
 
-> **tl;dr on s28:** Two scopes landed in one session. Scope B: Railway chroma sync (BACKLOG #42 RESOLVED via Z1 tarball-bootstrap — Railway now matches local byte-for-byte, 605/9224/8v3/Sugar Swaps strip-ON). Scope A: `docs/CONTENT_SOURCES.md` shipped (BACKLOG #35 RESOLVED, 489 lines, 14 domains, 13 target collections, 28 follow-up seeds). 6 highest-priority follow-ups promoted to BACKLOG as #44-#49. $0 spend across both scopes.
+> **tl;dr on s28:** Three scopes landed in one session (B + A + extended C). Scope B: Railway chroma sync (BACKLOG #42 RESOLVED). Scope A: `docs/CONTENT_SOURCES.md` shipped (BACKLOG #35 RESOLVED, 489 lines, 14 domains, 13 target collections). Scope C (extended): BACKLOG expansion to #50-#73 + **#44 executed** — `rf_published_content` collection created + 8 misplaced chunks migrated (605→597 in rf_reference_library, 0→8 in rf_published_content). $0 spend across all three scopes.
 
 ---
 
@@ -51,15 +51,17 @@ Expected top commit: **single session 28 close commit** landing `docs/CONTENT_SO
 
 Working tree clean. `origin/main` may or may not match local HEAD depending on whether Dan pushed. Check with `git fetch origin main && git log --oneline origin/main..HEAD`.
 
-### 0.3 — Data plane (UNCHANGED from s28 close — zero chroma writes in scope A)
+### 0.3 — Data plane (post s28-extended scope C — #44 migration applied)
 
-- `CHROMA_DB_PATH` from `.env` → `/Users/danielsmith/Claude - RF 2.0/chroma_db` (absolute, avoid relative-path foot-gun from s27)
-- rf_reference_library = **605** / rf_coaching_transcripts = **9,224**
-- v3 chunks = **8** via `source_pipeline=drive_loader_v3` (7 pdf + 1 v2_google_doc)
-- Sugar Swaps chunk (display_source "[RH] The Fertility-Smart Sugar Swap Guide", v3_category v2_google_doc): len = **3737**, no "canva", no "[COVER"
+- `CHROMA_DB_PATH` from `.env` → `/Users/danielsmith/Claude - RF 2.0/chroma_db` (absolute; avoid relative-path foot-gun from s27)
+- rf_reference_library = **597** (was 605 pre-#44; 8 v3 chunks migrated out)
+- **rf_published_content = 8** (NEW collection; 7 Egg Health Guide.pdf + 1 Sugar Swaps GDoc, migrated from rf_reference_library per #44)
+- rf_coaching_transcripts = **9,224** (unchanged; `client_rfids` still flagged for #45 removal)
+- v3 chunks = **8** via `source_pipeline=drive_loader_v3` — **all now in rf_published_content**, zero in rf_reference_library
+- Sugar Swaps chunk (now in rf_published_content): len = **3737**, no "canva", no "[COVER", category `v2_google_doc` (PDF re-ingest tracked as #73)
 - OCR cache at `data/image_ocr_cache`: **34 files**
 - Admin UI on PID from `lsof -iTCP:5052 -sTCP:LISTEN -P -n`; `Cache-Control: no-store`
-- **Railway: matches local byte-for-byte** per s28 scope B probe — `/data/chroma_db` = 485M / 55 files / 605 chunks / 8 v3 / Sugar Swaps strip-ON
+- **Railway: now diverges from local by 8 chunks** (rf_reference_library on Railway still has the 8 v3 chunks; rf_published_content doesn't exist on Railway). Low impact until agents retrieve from rf_published_content specifically. Tracked as #74 for batched future re-sync.
 
 ### 0.4 — Origin/main ghost-push check
 
@@ -79,11 +81,14 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ## Step 2 — scope options
 
-### Option A — #44 Create `rf_published_content` + migrate misplaced chunks (HIGH)
-**Scope:** Create the new Chroma collection. Move Sugar Swaps chunk out of `rf_reference_library` (confirmed our lead magnet, not external). Per-chunk review of remaining 7 v3 pdf chunks to determine which are ours vs external; migrate accordingly. After migration, `rf_reference_library` = external-approved only.
-**Spend:** $0 (no LLM). Wall clock ~45 min.
-**Risk:** Low. Migration via upsert pattern, byte-identical to a re-ingest. Verifiable via pre/post chunk counts + probe on Sugar Swaps location.
-**Unblocks:** Domains 1 / 2 / 3 ingestion paths (Blogs, Lead magnets, Email sequences).
+### Option A — #56 HTML handler + blog export pipeline (HIGH)
+**Scope:** Build a v3 handler for HTML content — the first new file-processing capability since v3 launched. Includes BeautifulSoup extraction, dedup integration (stage-1 md5 + stage-2 content_hash reused), canonical content-boundary detection (strip nav/ads/comments), image-reference handling. Decide source: live-scrape dralnashat.com / WordPress export / Kajabi-backup extraction. Matches existing v3 handler pattern.
+**Spend:** $0 for handler + test; possibly ~$0.02 for live-ingest of a single blog if we decide to do a smoke ingestion at end.
+**Risk:** Medium. New handler = new edge cases. Scope tightly: dry-run first, single-blog smoke commit before bulk.
+**Unblocks:** Domain 1 Blogs ingestion; partially unblocks Domain 3 Email (if platform exports render to HTML).
+**Effort:** ~3-4 hr handler + test; + ~1-2 hr source-pipeline decision.
+
+~~Option A (original) — #44 Create `rf_published_content` + migrate misplaced chunks (HIGH)~~ — **✅ completed in s28-extended.** Migration done via `scripts/migrate_s28_published_content_s29.py --commit`. 605→597/0→8 verified. Unblocks the above #56 work.
 
 ### Option B — #45 Remove stale `client_rfids` from `rf_coaching_transcripts` (MED)
 **Scope:** Tactical cleanup. The `client_rfids` field on all 9,224 coaching chunks contains values from an unfinished RFID system. Remove via upsert-with-metadata-minus-field. Add a verification probe showing zero chunks retain the field.
@@ -112,14 +117,14 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ### Tech-lead rec
 
-**A first** (#44 migration — highest strategic unblock, cleanest scope, quick, $0). Once `rf_published_content` exists, multiple future ingestion paths become possible instead of blocked.
+**A first** (#56 HTML handler — biggest strategic unblock now that #44 is done; Domain 1 Blogs is the largest single-content-type gap). Scope discipline: design + dry-run + single-blog smoke, not bulk commit, in this first session.
 
 Then based on energy:
-- **B (#45)** as a clean follow-on tactical win in the same session
-- OR **D (#49)** if Dan wants a strategic conversation about two-tier access
-- OR **C (#21 + #46)** if Dan wants a UI session
+- **B (#45)** as a clean follow-on tactical win (RFID field cleanup, ~30 min, pure metadata edit)
+- OR **F (PersistentClient guard)** if Dan wants a quick safety add-on
+- OR **D (#49)** for a strategic two-tier access conversation
 
-F is a clean ~30min add-on to any scope if budget permits.
+If #56 scope feels too large for one session, **split: design session → build session.** Don't try to land the whole handler in one sitting.
 
 ---
 
@@ -145,4 +150,4 @@ F is a clean ~30min add-on to any scope if budget permits.
 
 ## End of session 29 prompt
 
-s28 shipped the Railway sync AND the CONTENT_SOURCES.md map in a single session — the strategic pivot point. Session 29's cheapest leverage is **#44** (Create `rf_published_content` + migrate misplaced chunks) — unblocks three ingestion domains for ~45 minutes of work. Good luck.
+s28 shipped three scopes (Railway sync + CONTENT_SOURCES.md + #44 migration) in a single extended session — the strategic pivot point. Session 29's biggest leverage is **#56 (HTML handler + blog export pipeline)** — unblocks Domain 1 Blogs, the largest single content-type gap. Scope discipline: design + dry-run + single-blog smoke in this first session, not bulk. Good luck.
