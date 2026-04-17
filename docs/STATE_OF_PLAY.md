@@ -23,7 +23,7 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 |---|---|---|---|
 | `rf_reference_library` | **597** | Active, external-approved only — **#44 migration complete s28-extended (605→597, 8 v3 chunks moved out)** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
 | `rf_coaching_transcripts` | 9,224 | Active — **`client_rfids` field flagged stale s28 for removal per #45** | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
-| `rf_published_content` | **8** | **Active as of s28-extended** — 7 Egg Health Guide.pdf + 1 Sugar Swaps Google Doc chunks migrated from rf_reference_library per #44 | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
+| `rf_published_content` | **13** | **Active** — 8 migrated s28-extended (#44, Egg Health + Sugar Swaps) + 5 blog chunks from Indoor Air Pollution post (#56 single-post smoke). Bulk blog ingestion (80 remaining posts, 272 chunks) deferred to #75 | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
 | `rf_curriculum_paywalled` | not created | **Proposed s28** — target for behind-paywall course material (FKSP, TFF, RH Detox, etc.) | — |
 | `rf_sales_playbook` | not created | **Proposed s28** — target for IG DMs + sales call transcripts (high-close + comparative) | — |
 | `rf_marketing` | not created | **Proposed s28** — masterclasses, Meet & Greet, Funnels copy | — |
@@ -49,9 +49,10 @@ OCR cache: 34 files. Sugar Swaps chunk is strip-ON in production (Canva URL + CO
 **Ingestion:**
 - v1 loader — frozen
 - v2 loader — frozen except via M3 extract-and-redirect (s17 pattern established)
-- v3 loader — **live. Handles pdf / v2_google_doc / docx.** Next handler (plaintext / sheets / slides / images / av) technically unblocked but gated on #35 content source-of-truth decision
-- Dedup: stage-1 (md5 pre-extraction) + stage-2 (content_hash post-extraction) both live as of s20
-- Scrub: Layer B active in v3 handlers; retrofit on existing collections declined s23 per #6b
+- v3 loader — **live. Handles pdf / v2_google_doc / docx.** Drive-sourced only.
+- **blog_loader — NEW s28-extended.** WordPress REST API ingester (parallel to v3). `wp_rest` extraction method, writes to `rf_published_content`. Reuses v3 embedding + chunking + scrub + dedup helpers. Single-post smoke committed; bulk deferred per #75.
+- Dedup: stage-1 (md5 pre-extraction) + stage-2 (content_hash post-extraction) both live as of s20; blog_loader uses stage-2 (HTML md5 serves as stable stage-1 input)
+- Scrub: Layer B active in v3 handlers + blog_loader; retrofit on existing collections declined s23 per #6b
 
 **Retrieval + rendering:**
 - `rag_server/display.py` (s24) is the canonical rendering layer. `chunk_to_display(chunk, render_configs) -> dict` + `format_context(chunks, render_configs) -> str`
@@ -68,7 +69,7 @@ OCR cache: 34 files. Sugar Swaps chunk is strip-ON in production (Canva URL + CO
 
 ## Testing
 
-**Step 0 regression suite: 14 scripts, 209 assertions, all green.** Pure synthetic/pure logic, <$0.001 per run. All run in Step 0 every session:
+**Step 0 regression suite: 15 scripts, 232 assertions, all green.** Pure synthetic/pure logic, <$0.001 per run. All run in Step 0 every session:
 
 ```
 test_scrub_s13.py                      (19/19)
@@ -85,6 +86,7 @@ test_dedup_synthetic_s19.py            (15/15)
 test_canva_strip_synthetic_s19.py      (15/15)
 test_stage1_dedup_wiring_s20.py        (4/4)
 test_format_context_s24.py             (79/79)
+test_blog_loader_synthetic.py          (23/23, NEW s28-extended)
 ```
 
 **Live-API one-shots (NOT in Step 0, run on demand):**
@@ -96,22 +98,23 @@ test_format_context_s24.py             (79/79)
 
 ## What's next (active priorities)
 
-1. **BACKLOG #56 (HIGH) — HTML handler + blog export pipeline.** Now unblocked (#44 landed s28-extended). Biggest single file-processing capability add — Domain 1 Blogs ingestion. ~3-4 hr.
-2. **BACKLOG #46 (MED-HIGH) — Per-item review-and-select admin UI workflow.** Unblocks Domains 4c/7a/8a. Ties to #21 + #72.
-3. **BACKLOG #47 (MED-HIGH / LARGE) — Multi-modal ingestion handler.** Unblocks Domains 5b/5c/11a. Design doc first.
-4. **BACKLOG #45 (MED) — Remove stale `client_rfids` from `rf_coaching_transcripts`.** Tactical cleanup.
-5. **BACKLOG #57 (MED-HIGH) — Email platform export mechanism.** Domain 3 gate. Ties to #56 (HTML handler).
-6. **BACKLOG #36 — April-May 2023 Blogs.docx commit** (gated on #56 HTML handler — was also gated on #44 which is now closed)
-7. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
-8. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point; now compounds with #46 + #72 collection-expansion work)
-9. **BACKLOG #48 — Intelligent-scan classifier for zoom recordings.** Gate for Domain 8a.
-10. **BACKLOG #49 — Two-tier access decision (content-creation vs client-facing).** Dan decision pending.
-11. ~~BACKLOG #44~~ — ✅ resolved s28-extended (`rf_published_content` collection created + 8 v3 chunks migrated from rf_reference_library; 605→597, 0→8, conservation verified)
-12. ~~BACKLOG #35~~ — ✅ resolved s28 (`docs/CONTENT_SOURCES.md` shipped, 489 lines, 14 domains, 13 target collections, 28 follow-up seeds)
-13. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced via Z1 tarball-bootstrap)
-14. ~~BACKLOG #43~~ — ✅ resolved s27 (already done at a prior session)
+1. **BACKLOG #57 (MED-HIGH) — Email platform export mechanism.** Domain 3 gate. Blog loader's HTML extraction utilities (from #56) reusable here.
+2. **BACKLOG #45 (MED) — Remove stale `client_rfids` from `rf_coaching_transcripts`.** Tactical cleanup, ~30 min, $0. Pattern matches #44 migration.
+3. **BACKLOG #46 (MED-HIGH) — Per-item review-and-select admin UI workflow.** Unblocks Domains 4c/7a/8a. Ties to #21 + #72.
+4. **BACKLOG #47 (MED-HIGH / LARGE) — Multi-modal ingestion handler.** Unblocks Domains 5b/5c/11a. Design doc first.
+5. **BACKLOG #75 (LOW) — Bulk blog ingestion.** Fires when a consumer exists or cross-domain email dedup is designed.
+6. **BACKLOG #40 — Coaching link-surfacing polish** (Dan-directed, ~$0.25 A/B)
+7. **BACKLOG #21 — Folder-selection UI redesign** (biggest UI friction point; compounds with #46 + #72 collection-expansion work)
+8. **BACKLOG #48 — Intelligent-scan classifier for zoom recordings.** Gate for Domain 8a.
+9. **BACKLOG #49 — Two-tier access decision (content-creation vs client-facing).** Dan decision pending.
+10. ~~BACKLOG #56~~ — ✅ resolved s28-extended (code + single-post smoke shipped; bulk ingestion deferred to #75)
+11. ~~BACKLOG #44~~ — ✅ resolved s28-extended (`rf_published_content` collection created + 8 chunks migrated)
+12. ~~BACKLOG #36~~ — ✅ resolved s28-extended (superseded by #56 HTML pipeline; docx skipped)
+13. ~~BACKLOG #35~~ — ✅ resolved s28 (`docs/CONTENT_SOURCES.md` shipped)
+14. ~~BACKLOG #42~~ — ✅ resolved s28 (Railway chroma synced)
+15. ~~BACKLOG #43~~ — ✅ resolved s27
 
-**Full s28 follow-up list** now at BACKLOG #44-#73 (30 entries promoted from the `docs/CONTENT_SOURCES.md` seed list; #44 already closed). The full list above shows top priorities; see BACKLOG.md for full scope of each.
+**Full s28 follow-up list** at BACKLOG #44-#75. See BACKLOG.md for full scope of each.
 
 ## What's declined (do not re-propose)
 

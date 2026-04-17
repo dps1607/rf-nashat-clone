@@ -1139,17 +1139,14 @@ Dan decides the mappings; Claude documents. Becomes the input to selection decis
 
 ---
 
-### 36. April-May 2023 Blogs.docx commit deferred indefinitely
-**Priority:** Marker, not a task. Tracks a deferred decision.
+### 36. April-May 2023 Blogs.docx commit — ✅ RESOLVED session 28-extended (superseded by #56 HTML pipeline)
+**Priority:** Closed.
 
-**Scope:** Session 18 successfully dry-ran the docx handler against `April-May 2023 Blogs.docx` (file_id `1IjhVUc6Px8II4FH0PsMJlOvNX01E6S1-`, 7 chunks projected, all clean and locator-populated). The commit was deferred at the halt-before-commit gate because the same blog content exists in at least three forms (docx, published HTML on website, email broadcasts) and we hadn't decided which form is canonical.
+**Closure (s28-extended):** `docs/CONTENT_SOURCES.md` Domain 1 (s28) assigned HTML as the canonical source for blog posts, not docx. #56 (s28-extended) shipped the HTML pipeline via WordPress REST API. Same blog content is available through that pipeline. The April-May 2023 Blogs.docx is a manual docx export of one of the monthly Google Doc compilations; ingesting it would introduce duplicate content in a non-canonical form. **Do not commit this docx.** Pilot record at `data/ingest_runs/e1f02930bb104928.dry_run.json` retained for history.
 
-**Resolution path:** once `docs/CONTENT_SOURCES.md` (#35) is written and assigns a canonical source for "blog posts," revisit:
-  - If docx is canonical → commit the blogs file (re-run the dry-run, confirm 7-chunk count unchanged, run --commit, verify 7-point closure checklist)
-  - If HTML is canonical → skip the docx, plan an HTML handler for a future session
-  - If email broadcasts are canonical → skip the docx, plan a different ingestion strategy
+**Original scope text (kept as history for anyone cross-referencing):**
 
-**Until resolved:** the docx handler stays wired, but no blog-form docx files get committed. The pilot record at `data/ingest_runs/e1f02930bb104928.dry_run.json` documents what would have been written.
+Session 18 successfully dry-ran the docx handler against `April-May 2023 Blogs.docx` (file_id `1IjhVUc6Px8II4FH0PsMJlOvNX01E6S1-`, 7 chunks projected, all clean and locator-populated). The commit was deferred at the halt-before-commit gate because the same blog content exists in at least three forms (docx, published HTML on website, email broadcasts) and we hadn't decided which form is canonical.
 
 
 
@@ -1457,11 +1454,40 @@ Entries below are the remaining follow-up seeds from `docs/CONTENT_SOURCES.md` p
 **Scope:** Create the Chroma collection. Design the admin-UI upload surface for clients to share labs directly (uploads, shared in coaching calls, emailed in). Includes a PDF lab-report parser for common lab formats (Quest, LabCorp, Biocanic PDF exports). PII handling consistent with Domain 4b hardcoded-protected metadata pattern.
 **Effort:** Collection creation ~30 min; upload UI + parser ~1-2 days depending on lab-format coverage.
 
-### 56. HTML handler + blog export pipeline
-**Priority:** HIGH. Gate for Domain 1 (blogs). Blocks #36 (April-May 2023 Blogs commit).
-**Scope:** Build a v3 handler for HTML content. Includes: BeautifulSoup extraction, dedup integration (stage-1 md5 + stage-2 content_hash), canonical content boundary detection (strip navigation/ads/comments), image-reference handling. Also: decide source — live-scrape dralnashat.com (if it exposes blog RSS/sitemap), WordPress export, or Kajabi-backup extraction.
-**Effort:** ~2-3 hr handler + test; + ~1-2 hr source-pipeline decision and plumbing. Matches existing v3 handler pattern.
-**Unblocks:** Domain 1 canonical ingestion. Domain 3 Email sequences (if platform exports render to HTML).
+### 56. HTML handler + blog export pipeline — ✅ RESOLVED session 28-extended (code+smoke; bulk deferred to #75)
+**Priority:** Closed (code + smoke). Bulk ingestion deferred to #75.
+
+**Closure (s28-extended, 2026-04-17):**
+
+**Architecture decision:** built as a **parallel ingester** (`ingester/blog_loader.py`), not a v3 file-type handler, because the source is the WordPress REST API (not Drive). Reuses v3's commit-path infrastructure: same `OpenAIEmbeddingFunction(text-embedding-3-large)`, same `chunk_with_locators` (scrub Layer B runs automatically), same `_compute_content_hash` + `_check_dedup` stage-2 dedup, same `assert_local_chroma_path` guard.
+
+**Source-strategy decision:** WP REST API at `https://drnashatlatib.com/wp-json/wp/v2/posts`. Discovery findings: site is WordPress behind Cloudflare with Yoast SEO sitemap; 81 total blog posts available; REST returns structured JSON with title, content.rendered, date, modified, link, categories, tags, author. Cleaner than HTML scraping because `content.rendered` strips template chrome already. This deviates from the original scope text (live-scrape / WordPress-export / Kajabi-backup) in favor of the best-available pipeline discovered in s28-extended.
+
+**Files shipped:**
+- `ingester/blog_loader.py` — NEW, 411 lines. CLI: `--site`, `--library`, `--limit`, `--commit`. Dry-run default. Writes run records to `data/ingest_runs/<run_id>.(dry_run|).json` and appends to `data/audit.jsonl`. Chunk-ID namespace: `wp:<host>:<post_id>:<chunk_index>`.
+- `scripts/test_blog_loader_synthetic.py` — NEW, 23 unit tests (HTML stripping, shortcodes, images, nested divs, metadata builder, chunk-ID builder, md5 determinism). All passing.
+
+**Verification:**
+- Synthetic tests: **23/23 passing**
+- Full regression suite: **15/15 test scripts passing** (14 existing + new `test_blog_loader_synthetic.py`)
+- Single-post dry-run (Indoor Air Pollution post 18885): 5 chunks, $0.000618
+- Single-post `--commit`: rf_published_content 8 → 13 chunks. Fresh-client probe confirms chunk IDs, metadata (wp_post_id, slug, canonical_url, categories, author all resolved), content_hash, display fields all correctly populated.
+- Query sanity: "indoor air pollution fertility" → blog chunks top 3 hits (distance 0.2339). Non-blog query ("sugar alternatives for fertility") → Sugar Swaps top hit (distance 0.3692, unchanged from pre-#44 baseline — no regression).
+- Full-corpus dry-run (all 81 posts): 277 chunks, 994,152 chars, est $0.032. Zero errors, zero edge cases across 2+ years of blog content.
+
+**Bulk ingestion deferred (scope discipline):**
+Per Dan s28-extended: "We are currently building not going live. Is it good to do this now, or better later when we have full functionality." Agreed to defer. Reasoning:
+- No agent currently retrieves from `rf_published_content` — ingesting 277 chunks would be write-only until agent YAML is updated
+- Content-quality validation at n=1; 80 more unknowns
+- Cross-domain dedup with email content (Domain 3) not designed yet — bulk now + email later produces cross-collection near-duplicates
+- Schema may evolve (featured image, author bio, reading time, etc.)
+- Pipeline validation complete at n=1; architecture is proven
+
+Bulk run tracked as **#75** — fires when a consumer exists or content-quality/dedup validation completes.
+
+**Spend:** $0.000618 (one single-post commit via OpenAI text-embedding-3-large).
+
+**Unblocks:** Domain 1 canonical ingestion now has working pipeline. Domain 3 Email sequences can reuse the BeautifulSoup extraction helper. #36 (April-May 2023 Blogs.docx) resolved by this scope — canonical is HTML via this pipeline, not docx; #36 closed as superseded.
 
 ### 57. Email platform export mechanism
 **Priority:** MEDIUM-HIGH. Gate for Domain 3 (email sequences).
@@ -1554,3 +1580,16 @@ Entries below are the remaining follow-up seeds from `docs/CONTENT_SOURCES.md` p
 **Scope:** Post-#44, local has `rf_published_content` (8 chunks) + `rf_reference_library` (597) while Railway still has the pre-migration state (rf_reference_library=605, no rf_published_content). The 8 chunks are present on both sides just in different collections, so retrieval behavior is minimally affected until agents start retrieving from `rf_published_content` specifically. Re-sync Railway via the Z1 tarball-bootstrap playbook (per #42 s28 closure) when the next Railway-touching scope lands — or bundle with a later sync that aggregates multiple local-vs-Railway deltas.
 **Effort:** ~15 min monitoring (Z1 playbook is ~12 min download over trycloudflare); or batched with a future sync.
 **Anti-scope:** do not re-sync in isolation. Bundle with subsequent migrations or feature work that needs to reach production.
+
+### 75. Bulk blog ingestion (80 remaining posts, deferred from #56)
+**Priority:** LOW. Opened s28-extended post-#56 code-ship.
+**Scope:** Run `./venv/bin/python -m ingester.blog_loader --site https://drnashatlatib.com --library rf_published_content --commit` to ingest the 80 remaining blog posts (post 18885 / Indoor Air Pollution already committed as single-post smoke in #56). Dry-run shows 277 total chunks expected, ~$0.032 cost.
+
+**Fires when any of:**
+- An agent YAML is updated to retrieve from `rf_published_content` (making the chunks consumable — no point ingesting write-only data at scale)
+- Cross-domain dedup with email content (#57 + #68) is designed, to avoid introducing cross-collection duplicates when email ingestion follows
+- Explicit content-quality validation pass completes on a sample of 10-15 posts (spot-check extraction holds across the 2+ years of blog content, Elementor variations, guest posts, etc.)
+
+**Rollback:** `collection.delete(where={"source_pipeline": "blog_loader"})` via Chroma client — trivial undo.
+**Effort:** ~90 seconds wall clock for the commit + verification probe.
+**Anti-scope:** do not expand beyond bulk blog commit. Schema evolution, author bio enrichment, featured-image OCR, etc., are separate scopes.

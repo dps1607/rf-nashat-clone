@@ -3550,3 +3550,145 @@ $0. Zero LLM calls (embeddings preserved from existing vectors). Regression runs
 - OCR cache: 34 files (unchanged)
 
 **Railway:** still matches the post-scope-B state (605/9224/pre-migration) — **new divergence from local until #74 Railway re-sync**. Not urgent: the 8 chunks are present on both sides (just in different collections), so retrieval behavior is minimally affected until agents start retrieving from `rf_published_content` specifically. Re-sync when the next Railway-touching scope lands.
+
+---
+
+## Session 28 (extended, cont.) — BACKLOG #56 RESOLVED (code + smoke); #36 superseded; #75 opened (scope D, 2026-04-17)
+
+**Outcome:** Built and shipped the first non-Drive ingestion pipeline — WordPress blog loader — with TDD, single-post smoke commit, and full-corpus dry-run verification. Bulk ingestion deferred to #75 per build-vs-go-live discipline (no agent retrieves from `rf_published_content` yet, so bulk would be write-only). Zero regressions across 15 test scripts. Spend: $0.000618 for single-post embedding.
+
+### Scope decision chain
+
+Dan approved v2 scope A commits → asked to "fill the backlogs and proceed to adding the file processing capabilities." Session extended past formal s28 close. Path: BACKLOG expansion #50-#73 (scope C) → #44 collection migration (scope C) → #56 blog loader (scope D).
+
+### Source strategy discovery (#56)
+
+User provided blog URL `www.drnashatlatib.com/blog`. Discovery probes found:
+- WordPress behind Cloudflare (301 redirect `www.` → apex)
+- Yoast SEO `sitemap_index.xml` → post-sitemap + page-sitemap + category-sitemap + author-sitemap
+- Full WP REST API at `/wp-json/wp/v2/posts` — returns structured JSON with `content.rendered`, title, dates, categories, tags, author
+- **81 total posts** (via `x-wp-total` response header)
+- Post URL pattern uses category slug: `drnashatlatib.com/fertility/<slug>/`
+
+Chose **WP REST API** over the three options in #56 BACKLOG scope (live-scrape / WordPress export / Kajabi backup). Cleanest because `content.rendered` strips template chrome already, structured JSON eliminates content-boundary detection, stable IDs enable clean dedup.
+
+### Architecture decision
+
+Built as **parallel ingester** (`ingester/blog_loader.py`), not a v3 file-type handler. Rationale: v3 dispatches by Drive file mimeType; WP REST has no Drive file. Parallel ingester reuses v3's commit-path infrastructure:
+- Same `OpenAIEmbeddingFunction(model="text-embedding-3-large")` → cross-collection embedding parity
+- Same `chunk_with_locators` from `ingester.loaders.types` → scrub Layer B runs automatically
+- Same `_compute_content_hash` + `_check_dedup` from `drive_loader_v3` → stage-2 dedup
+- Same `assert_local_chroma_path` → no-Railway guard
+- New chunk-ID namespace: `wp:<host>:<post_id>:<chunk_index:04d>` (disambiguates from `drive:...` IDs)
+
+### TDD build
+
+Wrote 23 synthetic tests first (`scripts/test_blog_loader_synthetic.py`) — HTML stripping (simple paragraphs, headings, scripts/styles, nested elementor divs, images+alt, WP shortcodes, HTML entities, whitespace, iframes, comments, lists, blockquotes, empty content), chunk-ID builder (shape + idempotency + stability), `post_to_file_record` (core fields + title HTML strip), `build_blog_metadata` (full provenance + display + WP-specific extras + empty-taxonomy handling), content-hash determinism (identical HTML → identical md5, different HTML → different md5).
+
+Red phase confirmed (ModuleNotFoundError). Built `ingester/blog_loader.py` (411 lines) to pass tests. Green phase: **23/23 passing**.
+
+### Live verification
+
+**Dry-run, limit=1** (Indoor Air Pollution post 18885):
+- 17,194 plain text chars (from 46,167 HTML = 63% reduction = clean template stripping)
+- 5 chunks × 445-633 words each
+- Zero scrub hits
+- Metadata complete: display_source "Indoor Air Pollution and Fertility", wp_categories "FERTILITY" (resolved from ID), wp_author "Dr. Nashat Latib", canonical URL, content_hash, library_name rf_published_content
+- Est cost $0.000618
+
+**Single-post --commit:**
+- rf_published_content: 8 → 13 chunks (verified via fresh client probe)
+- Chunk IDs: `wp:drnashatlatib.com:18885:0000` through `0004` ✓
+- Query sanity: "indoor air pollution fertility" returns all 5 chunks as top hits (distance 0.2339 on the best chunk)
+- Cross-collection non-regression: "sugar alternatives for fertility" still returns Sugar Swaps top-hit at distance 0.3692 (identical to pre-#44 baseline)
+- Full regression suite: **15/15 test scripts passing** (14 existing + new blog_loader synthetic test)
+
+**Full-corpus dry-run (all 81 posts):**
+- 277 total chunks, 994,152 chars, 248,538 est embed tokens, est $0.032
+- Zero errors, zero edge cases
+- Per-post range: 1-10 chunks (smallest "living-a-fertile-lifestyle" at 1 chunk, largest "internal-external-toxins" at 10 chunks)
+- 2+ years of fertility blog content extracted cleanly
+
+### Build-vs-go-live decision
+
+Before bulk-commit, Dan asked: "We are currently building not going live. Is it good to do this now, or better later when we have full functionality?" Agreed to defer.
+
+**Rationale for defer:**
+- **No agent currently retrieves from `rf_published_content`.** `nashat_sales` routes to `rf_reference_library` only; `nashat_coaching` routes to `rf_reference_library + rf_coaching_transcripts`. Neither references `rf_published_content`. Bulk ingestion would be write-only until agent YAML updated.
+- **Content quality validated at n=1.** 80 more posts might have Elementor variations, guest-post collisions, featured-image-only posts, unusual shortcodes.
+- **Cross-domain dedup with email not designed (#68).** Blog content was emailed. Bulk now + email later → cross-collection near-duplicates.
+- **Schema may evolve.** Featured image OCR, author bio enrichment, reading-time metadata, related-posts extraction — each schema change requires re-ingestion.
+- **Pipeline is proven at n=1.** Architecture validated; scale is a separate scope.
+
+Tracked bulk as **#75**. Fires when: (a) an agent is configured to retrieve from rf_published_content, OR (b) cross-domain dedup design completes, OR (c) content-quality validation pass over 10-15 posts.
+
+Rollback is trivial: `collection.delete(where={"source_pipeline": "blog_loader"})`.
+
+### Files modified (scope D)
+
+```
+ingester/blog_loader.py                         NEW, 411 lines
+scripts/test_blog_loader_synthetic.py           NEW, 23 tests
+data/ingest_runs/4c3f6afa494b4fe4.dry_run.json  dry-run limit=1
+data/ingest_runs/5e930501580a4b71.json          single-post commit
+data/ingest_runs/7a7c020fbb7940ee.dry_run.json  full-corpus dry-run (all 81)
+data/audit.jsonl                                appended single-post commit entry
+docs/BACKLOG.md                                 #56 RESOLVED, #36 RESOLVED (superseded), #75 opened
+docs/STATE_OF_PLAY.md                           rf_published_content 8→13; blog_loader in ingestion section;
+                                                regression suite 14→15 scripts; priorities rewritten
+docs/HANDOVER.md                                this scope-D section
+docs/NEXT_SESSION_PROMPT_S29.md                 refresh (next commit)
+```
+
+### Files NOT touched (intentional)
+
+- Drive loaders (v1/v2/v3) — blog_loader is parallel, not a modification
+- rag_server/display.py — no scope
+- config/nashat_*.yaml — scope discipline (agent retrieval config is a separate scope)
+- Existing v3 handlers — untouched
+
+### Chroma state after scope D
+
+- `rf_reference_library`: 597 (unchanged from post-#44)
+- `rf_published_content`: **13** (8 migrated per #44 + 5 from Indoor Air Pollution blog per #56 single-post smoke)
+- `rf_coaching_transcripts`: 9,224 (unchanged; client_rfids still stale pending #45)
+- Total: 9,834 chunks across 3 collections
+- OCR cache: 34 files (unchanged; blog_loader doesn't use OCR)
+- Local-vs-Railway delta: #44 + #56 (13 chunks total in `rf_published_content` not on Railway; 8 of those also still in `rf_reference_library` on Railway). Tracked as #74. Low impact until agents retrieve from `rf_published_content`.
+
+### Session 28 extended spend
+
+$0.000618 total (one single-post blog embedding). Every dry-run and regression pass was $0.
+
+### Lessons carried forward
+
+1. **Parallel ingesters are cheaper than unifying abstractions.** The instinct to "extend v3 with a new handler" would have required refactoring v3's Drive-file dispatch to be source-agnostic. Writing a parallel ingester that reuses v3's proven commit-path helpers (embedding, chunking, scrub, dedup) via import was ~2 hours. Refactoring v3 would have been a day and risked regressions. Take the fork when the source is fundamentally different; refactor later if a third non-Drive source appears.
+
+2. **Build discipline vs go-live discipline are different.** During build, ingesting data that no consumer retrieves is waste — it creates rework when schema or handler evolves. During go-live, having data ready unblocks testing. Default to build discipline: ship the pipeline, smoke-test at n=1, defer bulk until a consumer exists. Dan's instinct to pause was correct.
+
+3. **WordPress REST API is the right source for most WordPress blogs.** Cleaner than HTML scraping. Stable. Structured. Zero template chrome. Pagination explicit. Recommendation for any future WP-hosted content (Funnels copy, other WP-managed surfaces).
+
+4. **TDD was fast for this scope.** 23 synthetic tests written before any loader code, then loader built to pass. Total turnaround ~1hr end-to-end. For any handler with a well-defined input shape (JSON / HTML / text), TDD is the right default.
+
+5. **Single-post smoke is a real architectural validation step.** Everything looked good in tests; one live commit against real production data revealed: taxonomy resolution works, embedding function parity works, metadata storage is Chroma-compatible (no unsupported types), chunk IDs don't collide, fresh-client probe can read everything back. None of these are worth assuming.
+
+### Open items at s28-extended scope-D close
+
+- **Next logical scope** — options in s29 prompt, but #57 email export is a natural follow-on (reuses blog_loader's HTML extraction utilities for rendered email bodies)
+- #45 RFID cleanup is the cheapest tactical close-out (~30 min, $0, mirrors #44 pattern)
+- #46 per-item admin UI is the biggest multiplier across domains 4c/7a/8a
+- #49 two-tier access decision pending Dan
+- **Full Step 1.5 audit next due: s31** (s26 was last)
+
+### Chroma state at end of session 28-extended scope D
+
+**Local (no changes from scope C except +5 blog chunks):**
+- `rf_reference_library`: 597 chunks
+- `rf_published_content`: **13 chunks** (8 migrated + 5 blog smoke)
+- `rf_coaching_transcripts`: 9,224 chunks
+- Total: 9,834 chunks across 3 collections
+- v3 chunks: 8 (all in rf_published_content)
+- blog_loader chunks: 5 (all in rf_published_content, `source_pipeline=blog_loader`)
+- OCR cache: 34 files (unchanged)
+
+**Railway:** diverged by 13 chunks now. No agent retrieves from rf_published_content, so production behavior unaffected. Tracked as #74.

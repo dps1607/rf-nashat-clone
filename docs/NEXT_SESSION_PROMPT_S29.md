@@ -13,7 +13,7 @@ This prompt is compact. The "carries forward unchanged" references below resolve
 
 **This bootstrap pattern carries forward to s30+.** When writing the s30 prompt at session close, copy this block and bump the S28/s28 references to S29/s29.
 
-> **tl;dr on s28:** Three scopes landed in one session (B + A + extended C). Scope B: Railway chroma sync (BACKLOG #42 RESOLVED). Scope A: `docs/CONTENT_SOURCES.md` shipped (BACKLOG #35 RESOLVED, 489 lines, 14 domains, 13 target collections). Scope C (extended): BACKLOG expansion to #50-#73 + **#44 executed** — `rf_published_content` collection created + 8 misplaced chunks migrated (605→597 in rf_reference_library, 0→8 in rf_published_content). $0 spend across all three scopes.
+> **tl;dr on s28:** Four scopes landed in one extended session. **Scope B:** Railway chroma sync (#42 RESOLVED). **Scope A:** `docs/CONTENT_SOURCES.md` shipped (#35 RESOLVED, 489 lines, 14 domains, 13 target collections). **Scope C:** BACKLOG expansion #50-#75 (30 new entries) + #44 migration executed (`rf_published_content` created + 8 chunks migrated). **Scope D:** #56 HTML handler + blog pipeline shipped via WordPress REST API, single-post smoke committed (rf_published_content 8→13), bulk ingestion deferred to #75 per build-vs-go-live discipline. #36 closed as superseded. Total spend $0.000618 across all four scopes.
 
 ---
 
@@ -51,17 +51,20 @@ Expected top commit: **single session 28 close commit** landing `docs/CONTENT_SO
 
 Working tree clean. `origin/main` may or may not match local HEAD depending on whether Dan pushed. Check with `git fetch origin main && git log --oneline origin/main..HEAD`.
 
-### 0.3 — Data plane (post s28-extended scope C — #44 migration applied)
+### 0.3 — Data plane (post s28-extended scope D — #44 + #56 applied)
 
 - `CHROMA_DB_PATH` from `.env` → `/Users/danielsmith/Claude - RF 2.0/chroma_db` (absolute; avoid relative-path foot-gun from s27)
-- rf_reference_library = **597** (was 605 pre-#44; 8 v3 chunks migrated out)
-- **rf_published_content = 8** (NEW collection; 7 Egg Health Guide.pdf + 1 Sugar Swaps GDoc, migrated from rf_reference_library per #44)
+- rf_reference_library = **597** (external-approved only per s28 tightening)
+- rf_published_content = **13** (8 migrated per #44: 7 Egg Health + 1 Sugar Swaps; 5 blog chunks per #56 single-post smoke: Indoor Air Pollution post 18885)
 - rf_coaching_transcripts = **9,224** (unchanged; `client_rfids` still flagged for #45 removal)
-- v3 chunks = **8** via `source_pipeline=drive_loader_v3` — **all now in rf_published_content**, zero in rf_reference_library
-- Sugar Swaps chunk (now in rf_published_content): len = **3737**, no "canva", no "[COVER", category `v2_google_doc` (PDF re-ingest tracked as #73)
+- Total: 9,834 chunks across 3 collections
+- v3 chunks = 8, all in rf_published_content
+- blog_loader chunks = 5, all in rf_published_content, `source_pipeline=blog_loader`
+- Sugar Swaps: len=3737, no canva, no COVER (strip-ON preserved across migration)
 - OCR cache at `data/image_ocr_cache`: **34 files**
 - Admin UI on PID from `lsof -iTCP:5052 -sTCP:LISTEN -P -n`; `Cache-Control: no-store`
-- **Railway: now diverges from local by 8 chunks** (rf_reference_library on Railway still has the 8 v3 chunks; rf_published_content doesn't exist on Railway). Low impact until agents retrieve from rf_published_content specifically. Tracked as #74 for batched future re-sync.
+- **Railway: diverges from local by 13 chunks** — all in `rf_published_content` which doesn't exist on Railway. Low impact until agents retrieve from `rf_published_content` specifically. Tracked as #74.
+- **Regression suite: 15 test scripts** (was 14) — new `test_blog_loader_synthetic.py` adds 23 assertions
 
 ### 0.4 — Origin/main ghost-push check
 
@@ -81,14 +84,13 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ## Step 2 — scope options
 
-### Option A — #56 HTML handler + blog export pipeline (HIGH)
-**Scope:** Build a v3 handler for HTML content — the first new file-processing capability since v3 launched. Includes BeautifulSoup extraction, dedup integration (stage-1 md5 + stage-2 content_hash reused), canonical content-boundary detection (strip nav/ads/comments), image-reference handling. Decide source: live-scrape dralnashat.com / WordPress export / Kajabi-backup extraction. Matches existing v3 handler pattern.
-**Spend:** $0 for handler + test; possibly ~$0.02 for live-ingest of a single blog if we decide to do a smoke ingestion at end.
-**Risk:** Medium. New handler = new edge cases. Scope tightly: dry-run first, single-blog smoke commit before bulk.
-**Unblocks:** Domain 1 Blogs ingestion; partially unblocks Domain 3 Email (if platform exports render to HTML).
-**Effort:** ~3-4 hr handler + test; + ~1-2 hr source-pipeline decision.
+### Option A — #57 Email platform export mechanism (MED-HIGH)
+**Scope:** Identify the authoritative email platform (Kajabi most likely; possibly ActiveCampaign or Mailchimp for legacy sequences) and build an export pipeline. Export surface likely HTML (rendered email body) + metadata (sequence name, send date, audience tag). Integrates with `blog_loader.py`'s `extract_plain_text_from_html` helper for body rendering — existing BeautifulSoup utilities from #56 are reusable.
+**Spend:** $0 for handler; ~$0.01-0.05 for smoke ingestion depending on corpus size.
+**Risk:** Medium. Depends heavily on which platform is authoritative and what API/export is available.
+**Effort:** ~2 hr platform discovery + ~3-4 hr handler + test. Single-sequence smoke before bulk.
 
-~~Option A (original) — #44 Create `rf_published_content` + migrate misplaced chunks (HIGH)~~ — **✅ completed in s28-extended.** Migration done via `scripts/migrate_s28_published_content_s29.py --commit`. 605→597/0→8 verified. Unblocks the above #56 work.
+~~Option A (prior) — #56 HTML handler + blog pipeline~~ — **✅ shipped s28-extended.** `ingester/blog_loader.py` (411 lines) + 23 synthetic tests (passing) + single-post smoke (Indoor Air Pollution post, 5 chunks committed). Bulk ingestion deferred to #75 pending consumer (agent retrieval config) or cross-domain dedup design (#68).
 
 ### Option B — #45 Remove stale `client_rfids` from `rf_coaching_transcripts` (MED)
 **Scope:** Tactical cleanup. The `client_rfids` field on all 9,224 coaching chunks contains values from an unfinished RFID system. Remove via upsert-with-metadata-minus-field. Add a verification probe showing zero chunks retain the field.
@@ -117,14 +119,16 @@ Default reading: CURRENT STATE section of STATE_OF_PLAY + HANDOVER s28 entries (
 
 ### Tech-lead rec
 
-**A first** (#56 HTML handler — biggest strategic unblock now that #44 is done; Domain 1 Blogs is the largest single-content-type gap). Scope discipline: design + dry-run + single-blog smoke, not bulk commit, in this first session.
+**A first** (#57 Email platform export — blog loader's HTML extraction helpers reusable; next big file-processing capability). Scope discipline: platform discovery first, then single-sequence smoke, defer bulk until consumer exists (same pattern as #56).
 
 Then based on energy:
-- **B (#45)** as a clean follow-on tactical win (RFID field cleanup, ~30 min, pure metadata edit)
-- OR **F (PersistentClient guard)** if Dan wants a quick safety add-on
-- OR **D (#49)** for a strategic two-tier access conversation
+- **B (#45)** as a clean tactical win (RFID field cleanup, ~30 min, $0, mirrors the #44 migration pattern)
+- **D (#49)** — two-tier access decision (Dan's call, strategic conversation, ~15 min if decision only)
+- **F (PersistentClient guard)** — quick safety add-on, ~30 min, $0
 
-If #56 scope feels too large for one session, **split: design session → build session.** Don't try to land the whole handler in one sitting.
+**Alternative first pick — tactical cleanup day:** start with #45 (RFID cleanup) then #49 (two-tier access decision) then F3 (PersistentClient guard). All three together ~1.5 hr and retire three items.
+
+If #57 email platform discovery surfaces blockers (no API access, export format unclear, etc.), pivot to **E (#47 multi-modal handler design doc)** — that's the next biggest file-processing capability in the backlog, and a design session is $0 value.
 
 ---
 
@@ -150,4 +154,4 @@ If #56 scope feels too large for one session, **split: design session → build 
 
 ## End of session 29 prompt
 
-s28 shipped three scopes (Railway sync + CONTENT_SOURCES.md + #44 migration) in a single extended session — the strategic pivot point. Session 29's biggest leverage is **#56 (HTML handler + blog export pipeline)** — unblocks Domain 1 Blogs, the largest single content-type gap. Scope discipline: design + dry-run + single-blog smoke in this first session, not bulk. Good luck.
+s28 shipped **four scopes** in a single extended session: Railway sync (#42), CONTENT_SOURCES.md (#35), #44 migration, and #56 HTML handler + blog pipeline (code + single-post smoke). Session 29's biggest leverage options: **#57 Email platform export** (biggest remaining file-processing capability, reuses #56 helpers), **#45 RFID cleanup** (quick tactical win), or a **governance cleanup day** (#45 + #49 + F3 together). Good luck.
