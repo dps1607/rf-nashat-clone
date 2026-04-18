@@ -1424,32 +1424,48 @@ The full 28-item seed list lives in `docs/CONTENT_SOURCES.md`. The entries below
 
 Entries below are the remaining follow-up seeds from `docs/CONTENT_SOURCES.md` promoted to proper BACKLOG entries. Collectively they cover collection creation, file-processing handlers, discovery tasks, and design decisions needed to execute against the domain map.
 
-### 50. Create `rf_curriculum_paywalled` collection
+## ⚠ s28 scope F drift-recovery note on #50–#55
+
+Items #50–#55 below were opened in s28 scope C as "create new collection" BACKLOG entries. On s28 scope F drift analysis against ADR_001–006, these are misdiagnosed — the proposed "collections" are **libraries within existing 4 collections** per ADR_002, not new Chroma collections. See `docs/2026-04-17-drift-recovery-s28.md` and `ADR_002_continuous_diff_and_registry.md` §"Starter library list" (15 starter libraries).
+
+Correct mapping (applied in s29-A.3):
+- #50 `rf_curriculum_paywalled` → supersedes as **ADR_002's `rf_internal_education` collection**, with libraries `fksp_curriculum`, `fertility_formula_curriculum`, `preconception_detox_curriculum`, `fksp_coaching_calls`, etc. Master plan Sessions 2-4 build this.
+- #51 `rf_sales_playbook` → supersedes as **libraries within `rf_published_content`**: `nashat_dms` (ADR_002 starter) + future libraries for sales-call transcripts. Not a new collection.
+- #52 `rf_marketing` → supersedes as libraries within `rf_published_content`: `masterclass_recordings` (ADR_002 starter) + future library for funnel copy. Not a new collection.
+- #53 `rf_testimonials` → multi-modal testimonial assets could be a new library within `rf_published_content` (e.g., `testimonials`). Not a new collection.
+- #54 `rf_visual_library` → supersedes as `canva_design_library` (ADR_002 starter, Reference tier) and/or `ig_content` (ADR_002 starter, Published tier). Not a new collection.
+- #55 `rf_lab_data` → needs a new ADR; if it's client-specific clinical data, belongs in the **clinical tier** (reserved in ADR_002, no libraries today). If it's educational about labs, belongs in `rf_reference_library` or `rf_internal_education`.
+
+**Triage in s29-A.3:** close #50–#55 as `SUPERSEDED BY ADR_002`. Open new library-creation items as needed.
+
+---
+
+### 50. Create `rf_curriculum_paywalled` collection — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM. Gate for Domains 4a / 4d / 5c / 7d ingestion.
 **Scope:** Create the Chroma collection. Gated on paywall-access-enforcement design (ties to #46 per-item review + #49 two-tier access + possibly #69 TFF client-access screening). Also see #70 naming decision (single vs split for text-vs-multimodal).
 **Effort:** ~30 min collection creation + schema metadata fields; longer if access enforcement bundled.
 
-### 51. Create `rf_sales_playbook` collection
+### 51. Create `rf_sales_playbook` collection — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM. Gate for Domain 4c.
 **Scope:** Create the Chroma collection. Gated on IG DMs export pipeline (#58) + sales-call source discovery (#63) + per-item review workflow (#46).
 **Effort:** ~30 min collection creation; handler work separate.
 
-### 52. Create `rf_marketing` collection
+### 52. Create `rf_marketing` collection — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM. Gate for Domain 11 (masterclasses, Meet & Greet, Funnels copy, RF Meet the Doctors).
 **Scope:** Create the Chroma collection. Gated on multi-modal handler (#47) for mp4 content + Funnels sub-folder inventory (#67).
 **Effort:** ~30 min collection creation.
 
-### 53. Create `rf_testimonials` collection
+### 53. Create `rf_testimonials` collection — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM. Gate for Domain 11b.
 **Scope:** Split from `rf_marketing` because multi-modal (images + videos + screenshots + text extractions) and distinct retrieval intent (sales-agent closing patterns, content-creation surfaces, website/Shopify pieces).
 **Effort:** ~30 min collection creation; gated on testimonial handler #61 + 3-marketing sub-folder inventory #67.
 
-### 54. Create `rf_visual_library` collection
+### 54. Create `rf_visual_library` collection — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM. Gate for Domain 14.
 **Scope:** Separate from `rf_marketing` because visual-library retrieval intent is "find a polished visual to reuse," marketing is "find teaching/copy content." Gated on IG archive export (#60) + Canva export (#59).
 **Effort:** ~30 min collection creation.
 
-### 55. Create `rf_lab_data` + design client-lab-upload intake pipeline
+### 55. Create `rf_lab_data` + design client-lab-upload intake pipeline — ⚠ SUPERSEDED BY ADR_002 (s28 scope F)
 **Priority:** MEDIUM-HIGH. Gate for Domain 13 (lab data library — Biocanic + client-provided).
 **Scope:** Create the Chroma collection. Design the admin-UI upload surface for clients to share labs directly (uploads, shared in coaching calls, emailed in). Includes a PDF lab-report parser for common lab formats (Quest, LabCorp, Biocanic PDF exports). PII handling consistent with Domain 4b hardcoded-protected metadata pattern.
 **Effort:** Collection creation ~30 min; upload UI + parser ~1-2 days depending on lab-format coverage.
@@ -1667,3 +1683,35 @@ Dan confirmed authoritative email platforms are **ActiveCampaign (older)** + **G
 **Projected spend:** ~$0.29 classifier + ~$0.05 embeddings = **~$0.35 total**. Well under $1 gate.
 **Rollback:** `collection.delete(where={"source_pipeline": "ac_email_loader"})`.
 **Anti-scope:** do not expand to schema changes, metadata enrichment, or cross-platform dedup during bulk run — those are separate scopes.
+
+---
+
+## NEW — s28 scope F drift-recovery items (s29-A primary scope)
+
+### 79. Rewrite `CONTENT_SOURCES.md` v2.0 — align with ADR_002/005/006 (s29-A.1)
+**Priority:** HIGH. First s29 deliverable. Per drift analysis at `docs/2026-04-17-drift-recovery-s28.md`.
+**Scope:** Keep the per-domain source-mapping content (blogs → WP REST, emails → AC/GHL, lead magnets as PDFs, etc.) but re-express in ADR_002's 4-collection + 15-library architecture. Add explicit `Supersedes:` headers acknowledging v1.0 (s28). Cross-reference ADRs at every architectural decision. Remove the 13-collection proposal; replace with `collection → library → source` mapping tables.
+**Effort:** ~2 hr.
+**Unblocks:** all future ingestion work can reference a coherent architecture.
+
+### 80. ADR_006 metadata backfill on 14 committed chunks (s29-A.2)
+**Priority:** HIGH. Second s29 deliverable.
+**Scope:** Metadata-only Chroma upsert against the 14 chunks in `rf_published_content`. Mirrors #44 migration pattern (pre/post count same, embeddings preserved). Per chunk add: `entry_type` (`published_post`), `origin` (`static_library` provisionally; may become `rest_api` per #82), `tier` (`published`), correct `library_name` (`blog_posts` for 5 blog chunks, `lead_magnets` for 8 Egg-Health+Sugar-Swaps chunks, `nurture_emails` for 1 AC chunk), `source_id` per ADR_002 addendum format, and the **48 boolean marker flags** via regex detection on chunk text.
+**Effort:** ~1-2 hr including per-chunk verification.
+**Spend:** $0 (no re-embedding).
+**Anti-scope:** do not add new chunks; do not re-ingest source material; just metadata backfill.
+
+### 81. Schema fix in `blog_loader.py` + `ac_email_loader.py` — emit ADR_006-compliant metadata (s29-A.4)
+**Priority:** HIGH. Third s29 deliverable.
+**Scope:** Update both loaders to emit ADR_006's universal chunk schema on new ingestions. Specifically: add `entry_type`, `origin`, `tier`, correct `library_name` (matching ADR_002 starter list), `source_id` per ADR_002 addendum, 48 marker flags via regex detection, ADR_006 `ingested_at` / `chunk_id` / `source_name` aligned field names. After this lands, #75 (bulk blog) and #78 (bulk AC) unblock with compliant schema.
+**Effort:** ~1 hr for both loaders + synthetic tests.
+
+### 82. New ADR — define `origin: rest_api` for REST-API-pull ingestion (s29-A.5, conditional)
+**Priority:** MEDIUM. Conditional on Dan decision.
+**Scope:** ADR_002/005 currently define two origins — `drive_walk` (continuously updated via folder walk + diff) and `static_library` (one-shot curated CLI load). REST-API pulls (blog_loader, ac_email_loader, future ig_post_loader) fit neither cleanly: they're remote-API-driven (not local files like static_library) but also change over time (unlike static). Draft ADR proposing `rest_api` as a third origin value with its own idempotency/diff semantics. Update ADR_002 addendum and ADR_006's origin field documentation in the same commit.
+**Effort:** ~1 hr ADR draft. Discussion/decision with Dan.
+
+### 83. BACKLOG re-triage against ADR_002/005/006 (s29-A.3)
+**Priority:** HIGH. Fourth s29 deliverable.
+**Scope:** Go through BACKLOG items #50-#78 systematically, marking those that conflict with ADR_002/005/006 as SUPERSEDED and re-expressing them as library-creation or field-addition items where appropriate. #50-#55 already flagged in s28-F as superseded; #73, #75, #78 bulk items keep. Review #56-#78 for compliance.
+**Effort:** ~30 min.

@@ -17,25 +17,45 @@ This is the canonical orientation surface for session 27+. If a fact below confl
 
 **Local (development sandbox):** `/Users/danielsmith/Claude - RF 2.0/rf-nashat-clone/` with Chroma at `/Users/danielsmith/Claude - RF 2.0/chroma_db/`. This is where all s16–s25 work has landed. Local leads Railway.
 
-## Data plane (exact as of s26 open)
+## Data plane (exact as of s28-extended scope F close)
 
-| Collection | Chunks | Status | Known pollution |
-|---|---|---|---|
-| `rf_reference_library` | **597** | Active, external-approved only — **#44 migration complete s28-extended (605→597, 8 v3 chunks moved out)** | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
-| `rf_coaching_transcripts` | 9,224 | Active — **`client_rfids` field flagged stale s28 for removal per #45** | Contains raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
-| `rf_published_content` | **14** | **Active** — 8 migrated s28-extended (#44) + 5 blog chunks (#56 smoke) + **1 AC email chunk (#57 smoke)**. Bulk blog ingestion deferred to #75; bulk AC email deferred to #78; GHL email blocked on API capability (#76) | Sugar Swaps still in Google Doc form; PDF re-ingest tracked as #73 |
-| `rf_curriculum_paywalled` | not created | **Proposed s28** — target for behind-paywall course material (FKSP, TFF, RH Detox, etc.) | — |
-| `rf_sales_playbook` | not created | **Proposed s28** — target for IG DMs + sales call transcripts (high-close + comparative) | — |
-| `rf_marketing` | not created | **Proposed s28** — masterclasses, Meet & Greet, Funnels copy | — |
-| `rf_testimonials` | not created | **Proposed s28** — multi-modal testimonial assets | — |
-| `rf_visual_library` | not created | **Proposed s28** — IG posts + Canva polished visuals | — |
-| `rf_lab_data` | not created | **Proposed s28** — client lab results (Biocanic + client-uploaded + Biocanic tutorials) | — |
-| `rf_supplements` | not created | **Proposed s28** — future Shopify supplements app data | — |
-| `rf_coaching_visuals` | not created | **Proposed s28** — BBT/MSQ/labs extracted from coaching-call videos | — |
-| `rf_internal_knowledge` | not created | **Proposed s28 (conditional on #49)** — content-creation-tier-only collection | — |
-| `rf_library_index` | not created | ADR_002 design, backfill pending | — |
+### ⚠ s28 collections-architecture drift correction
 
-**Collections architecture note (s28):** the above 13-collection map reflects the `docs/CONTENT_SOURCES.md` decisions. All 11 "not created" collections are design-phase only — actual creation happens per-ingestion-commit and may consolidate or split based on empirical retrieval behavior.
+The s28 scope A `docs/CONTENT_SOURCES.md` proposed a 13-collection model. This was **misaligned with ADR_002 / ADR_005 / ADR_006** which lock a 4-collection + 1-registry architecture with 15 starter libraries discriminated by `library_name` metadata. Full drift analysis: `docs/2026-04-17-drift-recovery-s28.md`. Rewrite of CONTENT_SOURCES.md + schema backfill scheduled for s29.
+
+**Canonical architecture (per ADR_001–006):**
+
+| Collection | Tier | Chunks | Status | Known pollution |
+|---|---|---|---|---|
+| `rf_reference_library` | reference | **597** | Active, external-approved only — #44 migration s28-extended (605→597, 8 chunks moved out — but see schema note below) | 584 pre-scrub A4M chunks may contain former-collaborator refs (retrofit declined per #6b, s23) |
+| `rf_coaching_transcripts` | paywalled | 9,224 | Active — `client_rfids` field flagged stale s28 for removal per #45 | Raw speaker diarization tokens referring to former collaborator (retrofit declined per #6b, s23) |
+| `rf_internal_education` | paywalled | **not created** | **The biggest missing piece.** Master plan Sessions 2–4 build this: FKSP + Fertility Formula + Preconception Detox curricula. Pipeline A (video+slides) not built. Pipeline C (visual PDF) not built. | — |
+| `rf_published_content` | published | **14** | Active, but **14 chunks are ADR_006-non-compliant** — missing `entry_type`, `origin`, `tier`, 48 marker flags, correct `library_name`. Schema backfill scheduled s29. | Schema drift tracked in drift-recovery-s28.md |
+| `rf_library_index` | — | not created | ADR_002 registry design. Still pending. Would track every file's state across collections. | — |
+
+**Starter libraries (ADR_002 §"Starter library list") — 15 libraries, flat within 3 tiers:**
+
+- Reference: `a4m_course`, `external_research`, `canva_design_library`
+- Paywalled: `historical_coaching_transcripts`, `fksp_curriculum`, `fksp_coaching_calls`, `fertility_formula_curriculum`, `fertility_formula_coaching_calls`, `preconception_detox_curriculum`, `preconception_detox_coaching_calls`
+- Published: `blog_posts`, `lead_magnets`, `masterclass_recordings`, `ig_content`, `nashat_dms`
+
+(Clinical tier reserved; no libraries today per ADR_002.)
+
+**Libraries are NOT separate Chroma collections.** They are metadata-filter slices within the 4 collections above. Cross-checking my 14 committed chunks: they belong in `rf_published_content` but should carry `library_name="blog_posts"` (5 chunks), `library_name="lead_magnets"` (8 chunks for Egg Health + Sugar Swaps), `library_name="nurture_emails"` (1 chunk for AC welcome email — note: `nurture_emails` not in the original starter list; may need ADR amendment OR map to an existing library).
+
+### Three orthogonal metadata dimensions (ADR_005 §7)
+
+| Dimension | Values | Purpose |
+|---|---|---|
+| `tier` | reference / paywalled / published / clinical | Access control |
+| `origin` | drive_walk / static_library | Ingestion path |
+| `entry_type` | coaching_transcript / reference_transcript / reference_document / published_post / ig_post / dm_exchange / ... | Content kind |
+
+### Universal chunk schema (ADR_006 §2)
+
+Every chunk must carry: `chunk_id`, `text`, `collection`, `library_name`, `entry_type`, `origin`, `tier`, `source_id`, `source_name`, `chunk_index`, `ingested_at`, + **48 boolean marker flags** (`marker_amh`, `marker_lh`, `marker_fsh`, ..., `marker_shbg`) + optional `speaker`, `topics`, `recommendations_given`, `type_metadata_json`.
+
+**The 14 chunks currently in `rf_published_content` do not conform.** One-pass metadata backfill planned for s29.
 
 Of the 605 chunks in `rf_reference_library`:
 - **8 v3-metadata-complete** (7 PDF + 1 v2_google_doc, with `extraction_method` / `library_name` / `content_hash` / `source_file_md5` populated — s21 backfill closure)

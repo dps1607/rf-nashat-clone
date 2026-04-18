@@ -1,8 +1,30 @@
 # CONTENT SOURCES — source-of-truth map for RAG ingestion
 
 **Version:** 1.0 (session 28, 2026-04-16)
-**Status:** active. Update via new BACKLOG entry whenever a domain is reassigned or a new domain surfaces.
-**Closes:** BACKLOG #35
+**Status:** ⚠ **DRIFT DETECTED — PARTIALLY SUPERSEDED BY ADR_001–006.** Rewrite scheduled for s29. Read this doc alongside the ADRs, not as a replacement for them.
+**Closes:** BACKLOG #35 (the deliverable shipped; alignment issues below tracked as drift-recovery in s29)
+
+---
+
+## ⚠ s28-extended scope F drift notice (2026-04-17)
+
+This document was written in s28 scope A without cross-referencing the canonical architecture decided in **ADR_001–006** and **`HANDOVER_INTERNAL_EDUCATION_BUILD.md`**. Significant alignment issues were discovered post-authoring by Dan during scope F.
+
+**What the ADRs say (authoritative):**
+- **Four content collections + one registry**, not 13: `rf_reference_library`, `rf_coaching_transcripts`, `rf_internal_education`, `rf_published_content`, + `rf_library_index`
+- **Fifteen starter libraries** discriminated by the `library_name` metadata field within those collections (ADR_002 starter list). Libraries are NOT separate collections.
+- **Universal chunk schema** per ADR_006: 7 required universal fields + 48 boolean marker flags + source attribution + optional correlations. NONE of the 14 chunks currently in `rf_published_content` are ADR_006-compliant.
+
+**What this doc proposed (needs revision):**
+- 13 proposed collections (`rf_sales_playbook`, `rf_marketing`, `rf_testimonials`, `rf_visual_library`, `rf_lab_data`, `rf_supplements`, `rf_internal_knowledge`, etc.) — these should all be **libraries within the 4 collections**, not separate collections
+- Omitted mention of `rf_internal_education` — the paywalled course curriculum collection (the biggest missing piece)
+- Chunk schema fields don't match ADR_006
+
+**Full drift analysis:** see `docs/2026-04-17-drift-recovery-s28.md`.
+
+**What's scheduled for s29 scope:** complete rewrite of this doc to align with ADR_002's four-collection / fifteen-library model + schema backfill of the 14 committed chunks to ADR_006 compliance.
+
+**Until the rewrite ships, use this doc's per-domain source mapping as informational input** (the domain-to-source mapping was genuinely useful — blogs from WP REST, emails from AC/GHL, lead magnets as PDFs vs Google Docs, etc.) **but cross-reference collection/library assignments against ADR_002's starter list** before acting on them.
 
 ---
 

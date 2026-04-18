@@ -3836,3 +3836,152 @@ Session 28 grand total (B + A + C + D + E): **~$0.006**.
 - OCR cache: 34 files (unchanged)
 
 **Railway:** diverged by 14 chunks now (no agent consumes rf_published_content, production unaffected). Tracked as #74.
+
+---
+
+## Session 28 (extended, cont.) — scope F drift recovery: caught and documented misalignment with ADR_001–006 (2026-04-17)
+
+**Outcome:** Before proposing any further scope work, Dan asked the right pushback question: *"go back to our pilot and other docs. isn't there a rag build path first? where are our drift controls?"* On reading `HANDOVER_INTERNAL_EDUCATION_BUILD.md` (April 10 master plan) + ADR_001–006 (April 11-12 refinements), significant alignment drift was found between s28 scopes A/C/D/E and the canonical architecture. Scope F documented the drift honestly, added new governance controls, updated state docs, re-triaged BACKLOG, and rewrote the s29 prompt to make drift alignment the primary s29 scope.
+
+**Critical:** no destructive undo was performed. The 14 chunks in `rf_published_content` remain (schema wrong, content good — fix is metadata-only backfill in s29). The 5 git commits from scopes A/C/D/E stand (they shipped real infrastructure; the framing around them was what drifted). The `CONTENT_SOURCES.md` doc got a drift-notice banner rather than a full rewrite (rewrite scheduled for s29).
+
+### Drift findings
+
+Full analysis at `docs/2026-04-17-drift-recovery-s28.md`. Summary:
+
+**1. Collection count.** My `CONTENT_SOURCES.md` proposed **13 collections**. ADR_002 locks **4 collections + 1 registry**:
+- `rf_reference_library`, `rf_coaching_transcripts`, `rf_internal_education`, `rf_published_content`, `rf_library_index`
+- Everything else I proposed as "new collections" (`rf_curriculum_paywalled`, `rf_sales_playbook`, `rf_marketing`, `rf_testimonials`, `rf_visual_library`, `rf_lab_data`, `rf_supplements`, `rf_internal_knowledge`) should be **libraries within those collections**, discriminated by `library_name` metadata.
+
+**2. Starter libraries.** ADR_002 §"Starter library list" defines 15 libraries across 3 tiers (Reference, Paywalled, Published; Clinical reserved). My CONTENT_SOURCES.md never mentioned libraries as a separate concept from collections.
+
+**3. Chunk schema.** ADR_006 defines a universal chunk metadata contract: 7 universal required fields + 48 boolean marker flags + source attribution + optional correlations + type-specific escape hatch. **Zero of the 14 chunks I committed to `rf_published_content` are ADR_006-compliant.** Missing: `entry_type`, `origin`, `tier`, correct `library_name` (I used collection name, not library name), `source_id` per ADR_002 addendum format, and all 48 marker flags.
+
+**4. Missing collection.** `rf_internal_education` — the paywalled course curriculum collection holding FKSP + Fertility Formula + Preconception Detox content — is not built. Not mentioned in CONTENT_SOURCES.md. Not in BACKLOG as a priority. This is the single biggest gap relative to the master plan (which makes Sessions 2-4 entirely about building this collection).
+
+**5. Ingestion path architecture.** ADR_002 + ADR_005 define two origins: `drive_walk` (folder walk + diff + UI) and `static_library` (CLI-loaded curated local-file content). `blog_loader.py` and `ac_email_loader.py` are REST-API-pull ingesters that fit neither cleanly. Either need a new origin value (`rest_api`) via ADR amendment, or need to be framed as `static_library`-like.
+
+**6. Execution environment.** Master plan: *"All ingestion runs on Railway. Local Mac is for code authoring only. No more local ChromaDB runs."* My blog_loader + ac_email_loader run locally against local Chroma. The 14 committed chunks exist in local Chroma only; Railway doesn't have them. Partial compliance: the #42 Railway chroma sync in scope B did ship pre-#44 Chroma state, but post-#44 content is purely local.
+
+**7. Session sequencing.** Master plan: Session 1 (setup + inventory) → Session 2 (FKSP pilot: video + PDF) → Session 3 (FKSP full) → Session 4 (Fertility Formula + Detox full) → Session 5 (rf_published_content) → Session 6 (agent YAML integration + Railway sync). s28 implicitly did partial Session 5 (blogs + AC emails into rf_published_content) without executing Sessions 2-4. `rf_internal_education` is empty. Pipelines A-D aren't built.
+
+### Drift controls — where they failed
+
+Existing controls (Step 0 reality check, Step 1 reading, Step 1.5 quick-check, Operating Model #1-7, anti-goals) all focus on in-session data-plane state and plan-doc-timestamps. None of them validate scope proposals against ADR decisions. The full Step 1.5 audit (next due s31) would catch this, but s28 wasn't a full-audit session.
+
+### New drift controls added scope F
+
+1. **New Operating Model rule #8:** predecessor-canonical-doc reading required. Before writing or amending any doc that will be referenced as canonical (CONTENT_SOURCES, CHUNK_SCHEMA, ingestion architecture, new ADRs), read all predecessor canonical docs (ADR_001-006, HANDOVER_INTERNAL_EDUCATION_BUILD.md, any doc flagged as canonical in STATE_OF_PLAY Governance section). Include explicit `Supersedes:` / `Aligns with:` headers.
+
+2. **New anti-goal:** NO new canonical schemas or collection architecture without reading ADR_002, ADR_005, ADR_006 first.
+
+3. **Step 1.5 quick-check 5th item (s28-F):** grep ADR_002 starter library list + ADR_006 collection names; verify every collection referenced in BACKLOG / CURRENT STATE / CONTENT_SOURCES.md exists in the ADRs or has explicit supersession.
+
+4. **Step 1 reading order update:** added ADR_001-006 + HANDOVER_INTERNAL_EDUCATION_BUILD.md to the mandatory reading set (or at minimum "if scope touches ingestion, chunk schema, or collection architecture, read these").
+
+### What scope F actually did
+
+1. **Wrote `docs/2026-04-17-drift-recovery-s28.md`** — full drift analysis doc. Pairs with this HANDOVER entry as the "audit record" of the scope-F work.
+
+2. **Added drift-notice banner to `docs/CONTENT_SOURCES.md`** — does not rewrite the doc (too expensive for this session; scheduled as s29-A.1). The banner explicitly says "partially superseded by ADR_001-006" and points to the drift-recovery doc.
+
+3. **Updated `docs/STATE_OF_PLAY.md` CURRENT STATE:**
+   - Collections table corrected from 13 proposed to 4 canonical + 1 registry
+   - Starter libraries list (15 libraries across 3 tiers) added
+   - Three orthogonal dimensions (tier / origin / entry_type) documented
+   - Universal chunk schema pointer (ADR_006) noted
+   - 14 chunks in rf_published_content flagged as schema-non-compliant pending s29 backfill
+   - `rf_internal_education` flagged as the biggest missing piece
+
+4. **Triaged BACKLOG #50-#55** — marked as `SUPERSEDED BY ADR_002` with explanation that these are libraries, not collections. Added introductory drift-note header above them.
+
+5. **Opened BACKLOG #79-#83** — the s29-A alignment work:
+   - #79 rewrite CONTENT_SOURCES.md v2.0
+   - #80 ADR_006 metadata backfill on 14 chunks
+   - #81 schema fix in blog_loader + ac_email_loader
+   - #82 new ADR for `origin: rest_api` (conditional)
+   - #83 BACKLOG re-triage against ADRs
+
+6. **Rewrote `docs/NEXT_SESSION_PROMPT_S29.md`:**
+   - Mandatory pre-work now lists ADR_001-006 + drift-recovery doc as required reading
+   - Operating Model updated with rule #8 + new anti-goal
+   - Step 0 Bootstrap + Step 0.6 ADR-alignment sanity check added
+   - Step 2 scope options rewritten — s29-A alignment is the PRIMARY scope, with tactical alternatives (s29-B FKSP pilot, s29-C RFID cleanup, s29-D F3 + #49) only if drift is acknowledged but deferred
+
+7. **This HANDOVER scope-F entry.**
+
+### What scope F did NOT do
+
+- Did not delete or modify the 14 chunks in `rf_published_content` (they stay; metadata backfill is s29 work)
+- Did not revert any of the 5 scope-A/C/D/E commits (no destructive git operations; infrastructure they shipped is real)
+- Did not rewrite CONTENT_SOURCES.md (scheduled for s29-A.1)
+- Did not modify blog_loader.py or ac_email_loader.py (schema fix scheduled for s29-A.4)
+- Did not start master plan Session 2 FKSP pilot (that's s29-B, after alignment)
+
+### Files modified (scope F)
+
+```
+docs/2026-04-17-drift-recovery-s28.md    NEW — drift analysis + action plan
+docs/CONTENT_SOURCES.md                  Added DRIFT NOTICE banner at top
+docs/STATE_OF_PLAY.md                    Data plane rewritten with 4-collection architecture
+docs/BACKLOG.md                          #50-#55 marked SUPERSEDED; drift-note header;
+                                         #79-#83 opened (s29-A scope)
+docs/HANDOVER.md                         this scope-F section
+docs/NEXT_SESSION_PROMPT_S29.md          Mandatory ADR reading; OM rule #8; new anti-goal;
+                                         Step 0.6 ADR-alignment check; Step 2 rewritten
+                                         around s29-A primary scope
+```
+
+### Files NOT touched (intentional)
+
+- `ingester/blog_loader.py`, `ingester/ac_email_loader.py`, `ingester/classify.py` — schema fix is s29-A.4 work
+- `scripts/migrate_s28_published_content_s29.py` — migration ran successfully; don't touch retrospectively
+- Chroma database — no chunk modifications in scope F
+- `ADR_001-006.md` — never modified ADRs during drift recovery; they are the authority we're aligning to
+- `HANDOVER_INTERNAL_EDUCATION_BUILD.md` — master plan unchanged; scope F aligns to it
+
+### Session 28 grand total spend
+
+$0.006 across scopes B/A/C/D/E (unchanged). Scope F is $0 (pure doc work).
+
+### Lessons carried forward to s29+
+
+1. **Silent demotion of canonical docs is a governance failure mode.** `HANDOVER_INTERNAL_EDUCATION_BUILD.md` was written April 10 as the master plan. The April 11 ADRs refined it but didn't replace it. Somewhere between then and s28, the master plan got implicitly demoted to historical status without an explicit supersession. New Operating Model rule #8 addresses this going forward.
+
+2. **Step 1.5 quick-check needs an ADR-alignment dimension.** The existing 4-item quick-check catches plan-doc timestamp drift but not scope-proposal-vs-ADR drift. Step 0.6 added for s29.
+
+3. **Writing canonical docs without reading predecessors is always drift.** v1.0 of CONTENT_SOURCES.md was written entirely in scope A without anyone (including me) opening ADR_001-006. Even though the per-domain source mapping was useful content, the architectural framing was independent of (and conflicted with) the already-decided ADR architecture. The rewrite cost is now real.
+
+4. **Dan's pushback is a high-signal control mechanism.** This drift wasn't caught by any of the automated/ceremonial controls. It was caught by Dan asking "go back to our pilot and other docs." Recommend explicitly: at any significant scope transition, Dan check "am I letting Claude propose architecture that should have referenced X?"
+
+5. **Correcting drift doesn't have to be destructive.** The infrastructure shipped in scopes A/C/D/E is real and useful. The drift was in the architectural framing around it. Correction = doc updates + schema backfill + BACKLOG re-triage, not revert or delete.
+
+### Open items at s28-extended scope-F close
+
+- **s29-A primary scope is the drift alignment** (5 items: #79-#83)
+- Only after s29-A: master plan Session 2 (FKSP pilot), #45 RFID cleanup, other tactical items
+- `rf_internal_education` collection still doesn't exist; Pipeline A (video) and Pipeline C (visual PDF) not built
+- All three orthogonal metadata dimensions (`tier`, `origin`, `entry_type`) need to surface in loader code and documentation
+- 14 chunks in `rf_published_content` need schema backfill (tracked as #80)
+- `CONTENT_SOURCES.md` still in its v1.0 drift state (tracked as #79 for rewrite)
+- **Full Step 1.5 audit next due: session 31** (s26 was last)
+
+### Chroma state at end of session 28-extended scope F
+
+**No data changes from scope E close.** Scope F was pure doc work.
+- `rf_reference_library`: 597 chunks
+- `rf_published_content`: 14 chunks (schema non-compliant — flagged for s29 backfill)
+- `rf_coaching_transcripts`: 9,224 chunks
+- Total: 9,835 chunks across 3 collections
+- OCR cache: 34 files (unchanged)
+- Local-vs-Railway delta: 14 chunks ahead locally. Tracked as #74. Low impact (no agent consumes rf_published_content).
+
+---
+
+## Session 28 — final wrap
+
+Six scopes landed (B, A, C, D, E, F). Total spend $0.006 LLM. 5 git commits from scopes B/A/C/D/E; scope F will be the 6th commit. No destructive operations. Regression suite 15/15 green throughout.
+
+Scope F surfaces an important lesson: **the "shipping infrastructure" cadence (B/A/C/D/E) ran faster than the "verifying against canonical architecture" cadence**. The new Operating Model rule #8 + new anti-goal + Step 0.6 check are an attempt to prevent the same pattern in s29+.
+
+s29 opens with alignment work (s29-A, items #79-#83) as the primary scope. Master plan Session 2 (FKSP pilot) comes after.
